@@ -1,0 +1,7 @@
+{
+  "name": "SUPPORTFLOW - Technical Support Management System",
+  "description": "A practical, reliable technical support management system with streamlined guided ticket creation, evidence attachments, ticket history audit, and advisory Gemini AI summaries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database Service
+  postgres:
+    image: postgres:16-alpine
+    container_name: supportflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: supportflow
+      POSTGRES_USER: supportflow_admin
+      POSTGRES_PASSWORD: supportflow_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supportflow_admin -d supportflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # SupportFlow Full-Stack Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: supportflow-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      SQL_HOST: postgres
+      SQL_DB_NAME: supportflow
+      SQL_USER: supportflow_admin
+      SQL_PASSWORD: supportflow_secret
+      SQL_ADMIN_USER: supportflow_admin
+      SQL_ADMIN_PASSWORD: supportflow_secret
+      JWT_SECRET: dev-docker-jwt-secret-key-391823908
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - app_uploads:/app/uploads
+
+volumes:
+  postgres_data:
+  app_uploads:
