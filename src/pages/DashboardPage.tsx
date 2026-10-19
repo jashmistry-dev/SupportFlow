@@ -1,9 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../lib/api.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { PriorityBadge } from '../components/PriorityBadge.tsx';
+import { RoleBadge } from '../components/RoleBadge.tsx';
+import { MetricCardSkeleton, TableSkeleton } from '../components/Skeleton.tsx';
+import { ErrorState } from '../components/ErrorState.tsx';
+import { EmptyState } from '../components/EmptyState.tsx';
 import {
   Inbox,
   Clock,
@@ -11,8 +15,10 @@ import {
   AlertCircle,
   PlusCircle,
   ArrowRight,
-  LifeBuoy,
-  FileQuestion,
+  Briefcase,
+  Users,
+  RefreshCw,
+  FolderOpen,
 } from 'lucide-react';
 
 interface DashboardSummary {
@@ -40,33 +46,32 @@ export const DashboardPage: React.FC = () => {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [recentTickets, setRecentTickets] = useState<TicketSummaryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async (isSilent = false) => {
     try {
-      setIsLoading(true);
+      if (isSilent) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
       setError(null);
       const res = await api.get('/dashboard/summary');
       setSummary(res.data.summary);
       setRecentTickets(res.data.recentTickets || []);
     } catch (err: any) {
       console.error('Failed to load dashboard:', err);
-      setError('Unable to load dashboard data.');
+      setError('Unable to load dashboard data. Please check connection and try again.');
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  };
-
-  useEffect(() => {
-    fetchDashboardData();
   }, []);
 
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
-  };
+  useEffect(() => {
+    fetchDashboardData(false);
+  }, [fetchDashboardData]);
 
   const formatDate = (dateString: string) => {
     const d = new Date(dateString);
@@ -79,226 +84,284 @@ export const DashboardPage: React.FC = () => {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* Top Header Card */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-slate-200">
+    <div className="space-y-6 animate-fade-in">
+      {/* Top Header & Page Context */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-[#E1E6EE] dark:border-[#344153]">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight">
-              {getGreeting()}, {user?.name}
+            <h1 className="text-xl font-bold tracking-tight text-[#202B3C] dark:text-[#F1F5F9]">
+              Support Operations Overview
             </h1>
-            <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-              {user?.role === 'ADMIN'
-                ? 'Administrator'
-                : user?.role === 'SUPPORT_AGENT'
-                ? 'Support Engineer'
-                : 'Employee / Requester'}
-            </span>
+            {user && <RoleBadge role={user.role} size="sm" />}
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            SupportFlow Internal Technical Support Operations
+          <p className="text-xs text-[#667085] dark:text-[#A5B1C2] mt-1">
+            Current system workload, triage status, and active technical tickets.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        {/* Action Controls */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Silent Refresh Button */}
+          <button
+            type="button"
+            onClick={() => fetchDashboardData(true)}
+            disabled={isLoading || isRefreshing}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-[#667085] dark:text-[#A5B1C2] bg-white dark:bg-[#192330] border border-[#E1E6EE] dark:border-[#344153] hover:text-[#202B3C] dark:hover:text-[#F1F5F9] hover:bg-[#F0F3F7] dark:hover:bg-[#202C3B] rounded-md transition-colors disabled:opacity-50"
+            title="Refresh dashboard metrics"
+            aria-label="Refresh dashboard metrics"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+
           {user?.role === 'REQUESTER' && (
             <Link
               to="/tickets/new"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors shadow-xs"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-all shadow-xs"
             >
               <PlusCircle className="w-3.5 h-3.5" />
-              Raise Ticket
+              <span>Raise New Ticket</span>
             </Link>
+          )}
+
+          {user?.role === 'SUPPORT_AGENT' && (
+            <Link
+              to="/my-work"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-all shadow-xs"
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              <span>Go to My Work</span>
+            </Link>
+          )}
+
+          {user?.role === 'ADMIN' && (
+            <>
+              <Link
+                to="/admin/users"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-all shadow-xs"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span>Invite / Users</span>
+              </Link>
+
+              <Link
+                to="/my-work"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#202B3C] dark:text-[#F1F5F9] bg-white dark:bg-[#192330] border border-[#E1E6EE] dark:border-[#344153] hover:bg-[#F0F3F7] dark:hover:bg-[#202C3B] rounded-md transition-colors"
+              >
+                <Briefcase className="w-3.5 h-3.5 text-[#667085] dark:text-[#A5B1C2]" />
+                <span>My Work</span>
+              </Link>
+            </>
           )}
 
           <Link
             to="/tickets"
-            className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-md transition-colors"
+            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-[#202B3C] dark:text-[#F1F5F9] bg-white dark:bg-[#192330] border border-[#E1E6EE] dark:border-[#344153] hover:bg-[#F0F3F7] dark:hover:bg-[#202C3B] rounded-md transition-colors"
           >
-            <span>{user?.role === 'REQUESTER' ? 'My Tickets' : 'View Queue'}</span>
-            <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
+            <span>{user?.role === 'REQUESTER' ? 'My Tickets' : 'Ticket Queue'}</span>
+            <ArrowRight className="w-3.5 h-3.5 text-[#667085] dark:text-[#A5B1C2]" />
           </Link>
         </div>
       </div>
 
+      {/* Error state with retry action */}
       {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-md text-xs text-red-700 flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-          <span>{error}</span>
+        <ErrorState
+          title="Dashboard unavailable"
+          message={error}
+          onRetry={() => fetchDashboardData(false)}
+        />
+      )}
+
+      {/* Metric Panels: Skeletons while loading; Structured cards once loaded */}
+      {isLoading ? (
+        <MetricCardSkeleton count={4} />
+      ) : (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          {/* Open */}
+          <Link
+            to="/tickets?status=OPEN"
+            className="group bg-white dark:bg-[#192330] p-4 rounded-lg border border-[#E1E6EE] dark:border-[#344153] hover:border-role-primary transition-all duration-150 shadow-xs hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">Open</span>
+              <Inbox className="w-4 h-4 text-[#8B95A5] dark:text-[#6B7B92] group-hover:text-role-primary transition-colors" />
+            </div>
+            <div className="text-2xl font-bold text-[#202B3C] dark:text-[#F1F5F9] mt-2 font-mono tabular-nums">
+              {summary?.open ?? 0}
+            </div>
+            <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] mt-1">
+              Awaiting triage
+            </div>
+          </Link>
+
+          {/* In Progress */}
+          <Link
+            to="/tickets?status=IN_PROGRESS"
+            className="group bg-white dark:bg-[#192330] p-4 rounded-lg border border-[#E1E6EE] dark:border-[#344153] hover:border-role-primary transition-all duration-150 shadow-xs hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">In Progress</span>
+              <Clock className="w-4 h-4 text-[#8B95A5] dark:text-[#6B7B92] group-hover:text-role-primary transition-colors" />
+            </div>
+            <div className="text-2xl font-bold text-[#202B3C] dark:text-[#F1F5F9] mt-2 font-mono tabular-nums">
+              {summary?.inProgress ?? 0}
+            </div>
+            <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] mt-1">
+              Under active investigation
+            </div>
+          </Link>
+
+          {/* Waiting on User */}
+          <Link
+            to="/tickets?status=WAITING_FOR_REQUESTER"
+            className="group bg-white dark:bg-[#192330] p-4 rounded-lg border border-[#E1E6EE] dark:border-[#344153] hover:border-role-primary transition-all duration-150 shadow-xs hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">Waiting on User</span>
+              <AlertCircle className="w-4 h-4 text-[#8B95A5] dark:text-[#6B7B92] group-hover:text-role-primary transition-colors" />
+            </div>
+            <div className="text-2xl font-bold text-[#202B3C] dark:text-[#F1F5F9] mt-2 font-mono tabular-nums">
+              {summary?.waitingForRequester ?? 0}
+            </div>
+            <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] mt-1">
+              Pending user response
+            </div>
+          </Link>
+
+          {/* Resolved */}
+          <Link
+            to="/tickets?status=RESOLVED"
+            className="group bg-white dark:bg-[#192330] p-4 rounded-lg border border-[#E1E6EE] dark:border-[#344153] hover:border-role-primary transition-all duration-150 shadow-xs hover:shadow-sm"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">Resolved</span>
+              <CheckCircle2 className="w-4 h-4 text-[#8B95A5] dark:text-[#6B7B92] group-hover:text-role-primary transition-colors" />
+            </div>
+            <div className="text-2xl font-bold text-[#202B3C] dark:text-[#F1F5F9] mt-2 font-mono tabular-nums">
+              {summary?.resolved ?? 0}
+            </div>
+            <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] mt-1">
+              Completed & verified
+            </div>
+          </Link>
         </div>
       )}
 
-      {/* Structured Metrics Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        {/* Open */}
-        <Link
-          to="/tickets?status=OPEN"
-          className="group bg-white p-4 rounded-lg border border-slate-200 hover:border-blue-400 hover:shadow-xs transition-all relative overflow-hidden"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">Open Tickets</span>
-            <span className="w-7 h-7 rounded-md bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Inbox className="w-4 h-4" />
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">
-            {isLoading ? '—' : summary?.open ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-            <span>Awaiting triage</span>
-          </div>
-        </Link>
-
-        {/* In Progress */}
-        <Link
-          to="/tickets?status=IN_PROGRESS"
-          className="group bg-white p-4 rounded-lg border border-slate-200 hover:border-amber-400 hover:shadow-xs transition-all relative overflow-hidden"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">In Progress</span>
-            <span className="w-7 h-7 rounded-md bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">
-            {isLoading ? '—' : summary?.inProgress ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-            <span>Actively investigated</span>
-          </div>
-        </Link>
-
-        {/* Waiting on Requester */}
-        <Link
-          to="/tickets?status=WAITING_FOR_REQUESTER"
-          className="group bg-white p-4 rounded-lg border border-slate-200 hover:border-purple-400 hover:shadow-xs transition-all relative overflow-hidden"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">Waiting on User</span>
-            <span className="w-7 h-7 rounded-md bg-purple-50 text-purple-600 flex items-center justify-center">
-              <AlertCircle className="w-4 h-4" />
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">
-            {isLoading ? '—' : summary?.waitingForRequester ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-            <span>Pending feedback</span>
-          </div>
-        </Link>
-
-        {/* Resolved */}
-        <Link
-          to="/tickets?status=RESOLVED"
-          className="group bg-white p-4 rounded-lg border border-slate-200 hover:border-emerald-400 hover:shadow-xs transition-all relative overflow-hidden"
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-500">Resolved</span>
-            <span className="w-7 h-7 rounded-md bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
-            </span>
-          </div>
-          <div className="text-2xl font-bold text-slate-900 mt-2">
-            {isLoading ? '—' : summary?.resolved ?? 0}
-          </div>
-          <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-            <span>Ready for closure</span>
-          </div>
-        </Link>
-      </div>
-
-      {/* Recent Tickets Section */}
-      <div className="bg-white rounded-lg border border-slate-200 shadow-xs overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-slate-200 bg-slate-50/50 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Recent Tickets
+      {/* Recent Activity / Queue Section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-[#202B3C] dark:text-[#F1F5F9]">
+              Recent Technical Tickets
             </h2>
-            <span className="text-xs font-medium text-slate-500">
-              ({recentTickets.length})
-            </span>
+            <p className="text-xs text-[#667085] dark:text-[#A5B1C2]">
+              Latest support cases submitted or updated across services.
+            </p>
           </div>
           <Link
             to="/tickets"
-            className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1"
+            className="text-xs font-semibold text-role-primary hover:underline flex items-center gap-1"
           >
-            <span>View all tickets</span>
-            <ArrowRight className="w-3 h-3" />
+            <span>View all</span>
+            <ArrowRight className="w-3.5 h-3.5" />
           </Link>
         </div>
 
+        {/* Recent Tickets Table or Skeletons */}
         {isLoading ? (
-          <div className="p-12 text-center text-xs text-slate-400">
-            Loading tickets...
-          </div>
+          <TableSkeleton rows={5} columns={6} showMobileCards={true} />
         ) : recentTickets.length === 0 ? (
-          <div className="py-14 px-4 text-center">
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center mx-auto text-slate-400 mb-3">
-              <FileQuestion className="w-6 h-6" />
-            </div>
-            <h3 className="text-sm font-semibold text-slate-800">No tickets found</h3>
-            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-              {user?.role === 'REQUESTER'
-                ? 'Create your first support ticket to get started.'
-                : 'No technical support tickets have been submitted yet.'}
-            </p>
-            {user?.role === 'REQUESTER' && (
-              <div className="mt-4">
-                <Link
-                  to="/tickets/new"
-                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors shadow-xs"
-                >
-                  <PlusCircle className="w-3.5 h-3.5" />
-                  Create your first support ticket
-                </Link>
-              </div>
-            )}
+          <div className="bg-white dark:bg-[#192330] rounded-lg border border-[#E1E6EE] dark:border-[#344153]">
+            <EmptyState
+              icon={FolderOpen}
+              title="No tickets recorded yet"
+              description="When tickets are created by requesters or synchronized with the desk, they will appear here in real time."
+              actionLabel={user?.role === 'REQUESTER' ? 'Raise First Ticket' : undefined}
+              onAction={user?.role === 'REQUESTER' ? () => window.location.assign('/tickets/new') : undefined}
+            />
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 font-semibold">
-                <tr>
-                  <th scope="col" className="px-4 py-3">Ticket</th>
-                  <th scope="col" className="px-4 py-3">Subject</th>
-                  <th scope="col" className="px-4 py-3">Category</th>
-                  <th scope="col" className="px-4 py-3">Priority</th>
-                  <th scope="col" className="px-4 py-3">Status</th>
-                  <th scope="col" className="px-4 py-3 text-right">Updated</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 bg-white">
-                {recentTickets.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="px-4 py-3 whitespace-nowrap font-mono font-semibold text-blue-600">
-                      <Link to={`/tickets/${t.id}`} className="hover:underline">
-                        {t.ticketNumber}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 font-medium text-slate-900 max-w-md">
-                      <Link
-                        to={`/tickets/${t.id}`}
-                        className="hover:text-blue-600 line-clamp-1"
-                      >
-                        {t.subject}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-slate-500">
-                      {t.category}
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
+          <div className="bg-white dark:bg-[#192330] rounded-lg border border-[#E1E6EE] dark:border-[#344153] overflow-hidden shadow-xs">
+            {/* Mobile Card View (< 640px) */}
+            <div className="divide-y divide-[#E1E6EE] dark:divide-[#344153] sm:hidden">
+              {recentTickets.map((t) => (
+                <Link
+                  key={t.id}
+                  to={`/tickets/${t.id}`}
+                  className="block p-3.5 hover:bg-[#F5F7FA] dark:hover:bg-[#202C3B]/60 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="font-mono font-semibold text-xs text-role-primary">
+                      {t.ticketNumber}
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <PriorityBadge priority={t.priority} size="sm" />
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap">
                       <StatusBadge status={t.status} size="sm" />
-                    </td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right text-slate-400 font-mono text-[11px]">
+                    </div>
+                  </div>
+                  <div className="font-medium text-xs text-[#202B3C] dark:text-[#F1F5F9] line-clamp-2 mb-2 leading-relaxed">
+                    {t.subject}
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] text-[#667085] dark:text-[#A5B1C2] pt-1 border-t border-[#E1E6EE]/60 dark:border-[#344153]/60">
+                    <span className="truncate pr-2">{t.category}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-[#8B95A5] dark:text-[#6B7B92]">
                       {formatDate(t.updatedAt)}
-                    </td>
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+
+            {/* Desktop Table (>= 640px) */}
+            <div className="hidden sm:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-[#E1E6EE] dark:divide-[#344153] text-left text-xs">
+                <thead className="bg-[#F0F3F7] dark:bg-[#202C3B] text-[#667085] dark:text-[#A5B1C2] font-semibold">
+                  <tr>
+                    <th scope="col" className="px-4 py-2.5">Ticket</th>
+                    <th scope="col" className="px-4 py-2.5">Subject</th>
+                    <th scope="col" className="px-4 py-2.5">Category</th>
+                    <th scope="col" className="px-4 py-2.5">Priority</th>
+                    <th scope="col" className="px-4 py-2.5">Status</th>
+                    <th scope="col" className="px-4 py-2.5 text-right">Updated</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-[#E1E6EE] dark:divide-[#344153] bg-white dark:bg-[#192330]">
+                  {recentTickets.map((t) => (
+                    <tr
+                      key={t.id}
+                      className="hover:bg-[#F5F7FA] dark:hover:bg-[#202C3B]/60 transition-colors group"
+                    >
+                      <td className="px-4 py-2.5 whitespace-nowrap font-mono font-medium text-role-primary">
+                        <Link to={`/tickets/${t.id}`} className="hover:underline">
+                          {t.ticketNumber}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2.5 font-medium text-[#202B3C] dark:text-[#F1F5F9] max-w-sm lg:max-w-md">
+                        <Link
+                          to={`/tickets/${t.id}`}
+                          className="hover:text-role-primary transition-colors line-clamp-1"
+                        >
+                          {t.subject}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap text-[#667085] dark:text-[#A5B1C2]">
+                        {t.category}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <PriorityBadge priority={t.priority} size="sm" />
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <StatusBadge status={t.status} size="sm" />
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap text-right text-[#8B95A5] dark:text-[#6B7B92] font-mono tabular-nums">
+                        {formatDate(t.updatedAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

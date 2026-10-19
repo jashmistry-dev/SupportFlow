@@ -1,6 +1,6 @@
 import multer from 'multer';
 import path from 'path';
-import { Request } from 'express';
+import type { Request } from 'express';
 
 const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 const ALLOWED_VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov']);

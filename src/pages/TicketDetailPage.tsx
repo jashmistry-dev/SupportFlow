@@ -1,49 +1,31 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.tsx';
 import { api } from '../lib/api.ts';
 import { StatusBadge } from '../components/StatusBadge.tsx';
 import { PriorityBadge } from '../components/PriorityBadge.tsx';
+import { TicketDetailSkeleton } from '../components/Skeleton.tsx';
+import { useToast } from '../context/ToastContext.tsx';
 import {
+  ArrowLeft,
+  Paperclip,
+  Clock,
+  Sparkles,
   ChevronDown,
   ChevronRight,
-  Paperclip,
+  Send,
   X,
   ExternalLink,
-  Clock,
   UserCheck,
   CheckCircle2,
+  AlertCircle,
+  FileImage,
+  FileVideo,
+  FileText,
+  Download,
 } from 'lucide-react';
 
-interface AttachmentItem {
-  id: number;
-  originalName: string;
-  storedName: string;
-  fileType: string;
-  fileSize: number;
-  fileUrl: string;
-  createdAt: string;
-  uploaderName: string;
-}
-
-interface CommentItem {
-  id: number;
-  body: string;
-  createdAt: string;
-  userName: string;
-  userRole: string;
-}
-
-interface HistoryItem {
-  id: number;
-  eventType: string;
-  oldValue: string | null;
-  newValue: string | null;
-  createdAt: string;
-  userName: string;
-}
-
-interface TicketDetail {
+interface TicketData {
   id: number;
   ticketNumber: string;
   subject: string;
@@ -55,25 +37,52 @@ interface TicketDetail {
   expectedResult?: string | null;
   actualResult?: string | null;
   errorMessage?: string | null;
-  affectedModule?: string | null;
   attemptedSolution?: string | null;
-  aiSummary?: string | null;
-  aiGeneratedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   requester: {
     id: number;
     name: string;
     email: string;
+    role: string;
   };
   assignee: {
     id: number;
     name: string;
     email: string;
+    role: string;
   } | null;
 }
 
-interface AISummaryData {
+interface Attachment {
+  id: number;
+  fileName: string;
+  originalName: string;
+  fileSize: number;
+  fileType: string;
+  fileUrl: string;
+  createdAt: string;
+}
+
+interface Comment {
+  id: number;
+  body: string;
+  createdAt: string;
+  userId: number;
+  userName: string;
+  userRole: string;
+}
+
+interface TicketEvent {
+  id: number;
+  eventType: string;
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: string;
+  userName: string;
+}
+
+interface AISummary {
   issueSummary: string;
   impact: string;
   whatHasBeenTried: string;
@@ -82,12 +91,10 @@ interface AISummaryData {
   suggestedTroubleshootingSteps: string[];
 }
 
-type AIState = 'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR';
-
 const ALL_STATUSES = [
   { value: 'OPEN', label: 'Open' },
   { value: 'IN_PROGRESS', label: 'In Progress' },
-  { value: 'WAITING_FOR_REQUESTER', label: 'Waiting for User' },
+  { value: 'WAITING_FOR_REQUESTER', label: 'Waiting on User' },
   { value: 'RESOLVED', label: 'Resolved' },
   { value: 'CLOSED', label: 'Closed' },
 ];
@@ -95,214 +102,200 @@ const ALL_STATUSES = [
 export const TicketDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
+  const navigate = useNavigate();
 
-  const [ticket, setTicket] = useState<TicketDetail | null>(null);
-  const [comments, setComments] = useState<CommentItem[]>([]);
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [agents, setAgents] = useState<Array<{ id: number; name: string }>>([]);
+  const [ticket, setTicket] = useState<TicketData | null>(null);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [history, setHistory] = useState<TicketEvent[]>([]);
+  const [agents, setAgents] = useState<{ id: number; name: string; email: string }[]>([]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Comments
+  // Attachment lightbox & failed load tracks
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [failedImages, setFailedImages] = useState<Record<number, boolean>>({});
+
+  // Comment & file uploads
   const [newComment, setNewComment] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Status & Assignment Actions
+  // Ticket actions
   const [isUpdating, setIsUpdating] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // AI Summary State
-  const [aiState, setAiState] = useState<AIState>('IDLE');
-  const [aiSummary, setAiSummary] = useState<AISummaryData | null>(null);
+  // Gemini AI summary
+  const [aiState, setAiState] = useState<'IDLE' | 'LOADING' | 'SUCCESS' | 'ERROR'>('IDLE');
+  const [aiSummary, setAiSummary] = useState<AISummary | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
   const [isAiExpanded, setIsAiExpanded] = useState(true);
 
-  // Lightbox & Attachments
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [isUploading, setIsUploading] = useState(false);
+  const { showToast } = useToast();
 
-  const fetchTicket = useCallback(async () => {
-    if (!id) return;
+  const fetchTicketDetails = async () => {
     try {
       setIsLoading(true);
       setError(null);
       const res = await api.get(`/tickets/${id}`);
-      const t = res.data.ticket;
-      setTicket(t);
-      setComments(res.data.comments || []);
+      setTicket(res.data.ticket);
       setAttachments(res.data.attachments || []);
+      setComments(res.data.comments || []);
       setHistory(res.data.history || []);
 
-      // If existing AI summary exists
-      if (t.aiSummary) {
-        try {
-          const parsed = JSON.parse(t.aiSummary);
-          setAiSummary(parsed);
-          setAiState('SUCCESS');
-        } catch {
-          // ignore parsing error
-        }
-      }
-
-      if (user?.role !== 'REQUESTER') {
-        const agRes = await api.get('/users/agents');
-        setAgents(agRes.data.agents || []);
+      if (res.data.aiSummary) {
+        setAiSummary(res.data.aiSummary);
+        setAiState('SUCCESS');
       }
     } catch (err: any) {
       console.error('Failed to load ticket:', err);
-      setError(err.response?.data?.error || 'Unable to load ticket details.');
+      setError(err.response?.data?.error || 'Failed to load ticket details.');
     } finally {
       setIsLoading(false);
     }
-  }, [id, user?.role]);
+  };
+
+  const fetchAgents = async () => {
+    if (user?.role === 'SUPPORT_AGENT' || user?.role === 'ADMIN') {
+      try {
+        const res = await api.get('/users?role=SUPPORT_AGENT');
+        const adminRes = await api.get('/users?role=ADMIN');
+        const combined = [...(res.data.users || []), ...(adminRes.data.users || [])];
+        const unique = Array.from(new Map(combined.map((m: any) => [m.id, m])).values());
+        setAgents(unique);
+      } catch (err) {
+        // ignore agent load errors
+      }
+    }
+  };
 
   useEffect(() => {
-    fetchTicket();
-  }, [fetchTicket]);
+    if (id) {
+      fetchTicketDetails();
+      fetchAgents();
+    }
+  }, [id]);
 
-  // Handle Comment Submission
+  const handleStatusChange = async (newStatus: string) => {
+    if (!ticket) return;
+    try {
+      setIsUpdating(true);
+      setActionError(null);
+      const res = await api.patch(`/tickets/${ticket.id}/status`, { status: newStatus });
+      setTicket((prev) => (prev ? { ...prev, status: res.data.ticket.status } : null));
+      showToast(`Status updated to ${newStatus.replace(/_/g, ' ')}`, 'success');
+      await fetchTicketDetails();
+    } catch (err: any) {
+      console.error('Failed to change status:', err);
+      setActionError(err.response?.data?.error || 'Failed to change ticket status.');
+      showToast('Failed to change ticket status', 'error');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handlePriorityChange = async (newPriority: string) => {
+    if (!ticket) return;
+    try {
+      setIsUpdating(true);
+      setActionError(null);
+      const res = await api.patch(`/tickets/${ticket.id}/priority`, { priority: newPriority });
+      setTicket((prev) => (prev ? { ...prev, priority: res.data.ticket.priority } : null));
+      showToast(`Priority updated to ${newPriority}`, 'success');
+      await fetchTicketDetails();
+    } catch (err: any) {
+      console.error('Failed to change priority:', err);
+      setActionError(err.response?.data?.error || 'Failed to update priority.');
+      showToast('Failed to update priority', 'error');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleAssigneeChange = async (newAssigneeId: number | null) => {
+    if (!ticket) return;
+    try {
+      setIsUpdating(true);
+      setActionError(null);
+      const res = await api.patch(`/tickets/${ticket.id}/assign`, { assigneeId: newAssigneeId });
+      setTicket((prev) => (prev ? { ...prev, assignee: res.data.ticket.assignee, assigneeId: res.data.ticket.assigneeId } : null));
+      showToast(newAssigneeId ? 'Ticket assignment updated' : 'Ticket unassigned', 'success');
+      await fetchTicketDetails();
+    } catch (err: any) {
+      console.error('Failed to assign ticket:', err);
+      setActionError(err.response?.data?.error || 'Failed to assign ticket.');
+      showToast('Failed to assign ticket', 'error');
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim() || !ticket) return;
 
     try {
       setIsPostingComment(true);
-      const res = await api.post(`/tickets/${ticket.id}/comments`, {
-        body: newComment.trim(),
-      });
+      setActionError(null);
+      const res = await api.post(`/tickets/${ticket.id}/comments`, { body: newComment.trim() });
       setComments((prev) => [...prev, res.data.comment]);
       setNewComment('');
-      // Refetch history
-      const ref = await api.get(`/tickets/${ticket.id}`);
-      setHistory(ref.data.history || []);
+      showToast('Comment posted successfully', 'success');
     } catch (err: any) {
-      console.error('Failed to post comment:', err);
-      alert(err.response?.data?.error || 'Failed to add reply');
+      console.error('Failed to add reply:', err);
+      setActionError(err.response?.data?.error || 'Failed to post reply.');
+      showToast('Failed to post reply', 'error');
     } finally {
       setIsPostingComment(false);
     }
   };
 
-  // Status Change
-  const handleStatusChange = async (newStatus: string) => {
-    if (!ticket) return;
-    try {
-      setIsUpdating(true);
-      await api.patch(`/tickets/${ticket.id}/status`, { status: newStatus });
-      await fetchTicket();
-    } catch (err: any) {
-      console.error('Failed to update status:', err);
-      alert(err.response?.data?.error || 'Failed to update status');
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  // Priority Change
-  const handlePriorityChange = async (newPriority: string) => {
-    if (!ticket) return;
-    try {
-      setIsUpdating(true);
-      await api.patch(`/tickets/${ticket.id}/priority`, { priority: newPriority });
-      await fetchTicket();
-    } catch (err: any) {
-      console.error('Failed to update priority:', err);
-      alert(err.response?.data?.error || 'Failed to update priority');
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  // Assignee Change (Admin / Agent)
-  const handleAssigneeChange = async (assigneeId: number | null) => {
-    if (!ticket) return;
-    try {
-      setIsUpdating(true);
-      await api.patch(`/tickets/${ticket.id}/assign`, { assigneeId });
-      await fetchTicket();
-    } catch (err: any) {
-      console.error('Failed to assign ticket:', err);
-      alert(err.response?.data?.error || 'Failed to assign ticket');
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  // AI Summary Generation with AbortController & 30s Timeout
-  const handleGenerateAISummary = async () => {
-    if (!ticket) return;
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, 30000); // 30 seconds client timeout
-
-    setAiState('LOADING');
-    setAiError(null);
-
-    try {
-      const res = await api.post(
-        `/tickets/${ticket.id}/ai-summary`,
-        {},
-        { signal: controller.signal }
-      );
-
-      clearTimeout(timeoutId);
-
-      if (res.data?.success && res.data?.summary) {
-        setAiSummary(res.data.summary);
-        setAiState('SUCCESS');
-        setIsAiExpanded(true);
-        // Refresh ticket details & history
-        const refreshed = await api.get(`/tickets/${ticket.id}`);
-        setHistory(refreshed.data.history || []);
-      } else {
-        setAiError(res.data?.message || 'AI summary is temporarily unavailable.');
-        setAiState('ERROR');
-      }
-    } catch (err: any) {
-      clearTimeout(timeoutId);
-      console.error('AI summary request error:', err);
-
-      if (
-        err.name === 'CanceledError' ||
-        err.code === 'ECONNABORTED' ||
-        err.message?.includes('timeout') ||
-        controller.signal.aborted
-      ) {
-        setAiError('AI summary timed out. Please try again.');
-      } else {
-        setAiError(err.response?.data?.message || 'AI summary is temporarily unavailable.');
-      }
-      setAiState('ERROR');
-    } finally {
-      // Guaranteed to exit loading
-    }
-  };
-
-  // Upload Additional Attachment
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!ticket) return;
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-
-    const formData = new FormData();
-    files.forEach((f) => formData.append('files', f));
+    const files = e.target.files;
+    if (!files || !files.length || !ticket) return;
 
     try {
       setIsUploading(true);
-      await api.post(`/tickets/${ticket.id}/attachments`, formData, {
+      setActionError(null);
+      const formData = new FormData();
+      for (let i = 0; i < files.length; i++) {
+        formData.append('files', files[i]);
+      }
+
+      const res = await api.post(`/tickets/${ticket.id}/attachments`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      await fetchTicket();
+
+      setAttachments((prev) => [...prev, ...(res.data.attachments || [])]);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      showToast('Attachment uploaded successfully', 'success');
     } catch (err: any) {
-      console.error('Failed to upload file:', err);
-      alert(err.response?.data?.error || 'Failed to upload attachment');
+      console.error('Failed to upload attachment:', err);
+      setActionError(err.response?.data?.error || 'Failed to upload attachment.');
+      showToast('Failed to upload attachment', 'error');
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleGenerateAISummary = async () => {
+    if (!ticket) return;
+    try {
+      setAiState('LOADING');
+      setAiError(null);
+      const res = await api.post(`/tickets/${ticket.id}/ai-summary`);
+      setAiSummary(res.data.summary);
+      setAiState('SUCCESS');
+      await fetchTicketDetails();
+    } catch (err: any) {
+      console.error('AI summary failed:', err);
+      setAiState('ERROR');
+      setAiError(
+        err.response?.data?.message ||
+          'AI summary is temporarily unavailable. Please try again later.'
+      );
     }
   };
 
@@ -311,26 +304,37 @@ export const TicketDetailPage: React.FC = () => {
     return d.toLocaleDateString(undefined, {
       month: 'short',
       day: 'numeric',
+      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     });
   };
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   if (isLoading) {
-    return (
-      <div className="max-w-6xl mx-auto px-4 py-16 text-center text-xs text-gray-500">
-        Loading ticket details...
-      </div>
-    );
+    return <TicketDetailSkeleton />;
   }
 
   if (error || !ticket) {
     return (
-      <div className="max-w-md mx-auto px-4 py-16 text-center">
-        <h2 className="text-sm font-semibold text-gray-900">Ticket not found</h2>
-        <p className="text-xs text-gray-500 mt-1">{error || 'This ticket could not be found.'}</p>
-        <Link to="/tickets" className="mt-4 inline-block text-xs text-blue-600 hover:underline">
-          Return to tickets
+      <div className="bg-white dark:bg-[#192330] rounded-lg border border-[#E1E6EE] dark:border-[#344153] p-12 text-center max-w-lg mx-auto">
+        <h2 className="text-sm font-semibold text-[#202B3C] dark:text-[#F1F5F9]">
+          Ticket Not Found
+        </h2>
+        <p className="text-xs text-[#667085] dark:text-[#A5B1C2] mt-1">
+          {error || 'This ticket could not be found or you do not have permission to view it.'}
+        </p>
+        <Link
+          to="/tickets"
+          className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-colors"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span>Return to tickets</span>
         </Link>
       </div>
     );
@@ -338,72 +342,114 @@ export const TicketDetailPage: React.FC = () => {
 
   const isRequester = user?.role === 'REQUESTER';
   const isAgentOrAdmin = user?.role === 'SUPPORT_AGENT' || user?.role === 'ADMIN';
-  const isAdmin = user?.role === 'ADMIN';
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6 space-y-6">
-      {/* ================= HEADER ================= */}
-      <div className="pb-4 border-b border-gray-200">
-        <div className="text-xs font-mono text-gray-500 mb-1">
-          {ticket.ticketNumber}
+    <div className="space-y-6">
+      {/* Top Bar / Header */}
+      <div className="pb-4 border-b border-[#E1E6EE] dark:border-[#344153]">
+        <div className="flex items-center gap-2 mb-1">
+          <Link
+            to="/tickets"
+            className="text-xs text-[#667085] hover:text-[#202B3C] dark:text-[#A5B1C2] dark:hover:text-[#F1F5F9] font-medium flex items-center gap-1"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Tickets</span>
+          </Link>
+          <span className="text-[#8B95A5] dark:text-[#6B7B92] text-xs">/</span>
+          <span className="text-xs font-mono font-semibold text-role-primary">
+            {ticket.ticketNumber}
+          </span>
         </div>
+
         <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div>
-            <h1 className="text-lg sm:text-xl font-bold text-gray-900">
+          <div className="space-y-1">
+            <h1 className="text-xl font-bold tracking-tight text-[#202B3C] dark:text-[#F1F5F9]">
               {ticket.subject}
             </h1>
-            <div className="text-xs text-gray-500 mt-1">
-              Opened by {ticket.requester.name} on {formatDate(ticket.createdAt)}
+            <div className="text-xs text-[#667085] dark:text-[#A5B1C2] flex flex-wrap items-center gap-2">
+              <span>Opened by <strong className="text-[#202B3C] dark:text-[#F1F5F9]">{ticket.requester.name}</strong></span>
+              <span>·</span>
+              <span className="font-mono tabular-nums">{formatDate(ticket.createdAt)}</span>
+              <span>·</span>
+              <span className="px-2 py-0.5 rounded bg-[#F0F3F7] dark:bg-[#202C3B] text-[11px] font-medium">
+                {ticket.category}
+              </span>
             </div>
           </div>
-          <div className="flex items-center gap-2 self-start">
+
+          <div className="flex items-center gap-2 self-start shrink-0">
             <PriorityBadge priority={ticket.priority} />
             <StatusBadge status={ticket.status} />
           </div>
         </div>
       </div>
 
-      {/* ================= 2-COLUMN LAYOUT ================= */}
+      {actionError && (
+        <div className="p-3 bg-red-50 dark:bg-[#381E24] border border-red-200 dark:border-[#5C2A34] rounded-md text-xs text-red-700 dark:text-[#F87171] flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+          <span>{actionError}</span>
+        </div>
+      )}
+
+      {/* 2-Column Responsive Workspace Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ================= LEFT / MAIN AREA (2 COLUMNS) ================= */}
+        {/* Main Left Column (Dominant, 2/3 width) */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Problem Description */}
-          <div className="bg-white p-4 rounded border border-gray-200 space-y-3">
-            <h2 className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
-              Problem
+          {/* Problem & Diagnostic Context */}
+          <div className="bg-white dark:bg-[#192330] p-5 rounded-lg border border-[#E1E6EE] dark:border-[#344153] space-y-4">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-[#667085] dark:text-[#A5B1C2]">
+              Problem Description
             </h2>
-            <div className="text-xs text-gray-900 whitespace-pre-line leading-relaxed">
+            <div className="text-xs text-[#202B3C] dark:text-[#F1F5F9] whitespace-pre-line leading-relaxed">
               {ticket.description}
             </div>
 
-            {/* Diagnostic Context Fields */}
+            {/* Diagnostic Fields if provided */}
             {(ticket.tryingToDo || ticket.expectedResult || ticket.actualResult || ticket.errorMessage || ticket.attemptedSolution) && (
-              <div className="pt-3 border-t border-gray-100 space-y-3">
+              <div className="pt-4 border-t border-[#E1E6EE] dark:border-[#344153] space-y-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-[#8B95A5] dark:text-[#6B7B92]">
+                  Diagnostic Context
+                </div>
+
                 {ticket.tryingToDo && (
                   <div>
-                    <div className="text-[11px] font-medium text-gray-500">What I was trying to do</div>
-                    <div className="text-xs text-gray-800 mt-0.5">{ticket.tryingToDo}</div>
+                    <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                      Goal / What was being attempted
+                    </div>
+                    <div className="text-xs text-[#202B3C] dark:text-[#F1F5F9] mt-0.5">
+                      {ticket.tryingToDo}
+                    </div>
                   </div>
                 )}
 
                 {ticket.expectedResult && (
                   <div>
-                    <div className="text-[11px] font-medium text-gray-500">Expected result</div>
-                    <div className="text-xs text-gray-800 mt-0.5">{ticket.expectedResult}</div>
+                    <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                      Expected Behavior
+                    </div>
+                    <div className="text-xs text-[#202B3C] dark:text-[#F1F5F9] mt-0.5">
+                      {ticket.expectedResult}
+                    </div>
                   </div>
                 )}
 
                 {ticket.actualResult && (
                   <div>
-                    <div className="text-[11px] font-medium text-gray-500">Actual result</div>
-                    <div className="text-xs text-gray-800 mt-0.5">{ticket.actualResult}</div>
+                    <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                      Actual Outcome
+                    </div>
+                    <div className="text-xs text-[#202B3C] dark:text-[#F1F5F9] mt-0.5">
+                      {ticket.actualResult}
+                    </div>
                   </div>
                 )}
 
                 {ticket.errorMessage && (
                   <div>
-                    <div className="text-[11px] font-medium text-gray-500">Error message</div>
-                    <div className="mt-0.5 p-2 bg-gray-50 border border-gray-200 rounded text-xs font-mono text-red-700 whitespace-pre-wrap break-words">
+                    <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                      Raw Error Message / Trace
+                    </div>
+                    <div className="mt-1 p-2.5 bg-[#F0F3F7] dark:bg-[#202C3B] border border-[#E1E6EE] dark:border-[#344153] rounded text-xs font-mono text-red-600 dark:text-red-400 whitespace-pre-wrap break-words">
                       {ticket.errorMessage}
                     </div>
                   </div>
@@ -411,22 +457,31 @@ export const TicketDetailPage: React.FC = () => {
 
                 {ticket.attemptedSolution && (
                   <div>
-                    <div className="text-[11px] font-medium text-gray-500">Already tried</div>
-                    <div className="text-xs text-gray-800 mt-0.5">{ticket.attemptedSolution}</div>
+                    <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                      Troubleshooting Already Attempted
+                    </div>
+                    <div className="text-xs text-[#202B3C] dark:text-[#F1F5F9] mt-0.5">
+                      {ticket.attemptedSolution}
+                    </div>
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* Evidence Attachments */}
-          <div className="bg-white p-4 rounded border border-gray-200 space-y-3">
+          {/* Evidence / Attachments with Resilient Fallback States */}
+          <div className="bg-white dark:bg-[#192330] p-5 rounded-lg border border-[#E1E6EE] dark:border-[#344153] space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
-                Evidence ({attachments.length})
-              </h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xs font-bold uppercase tracking-wider text-[#667085] dark:text-[#A5B1C2]">
+                  Evidence & Attachments
+                </h2>
+                <span className="text-xs font-mono text-[#8B95A5] dark:text-[#6B7B92]">
+                  ({attachments.length})
+                </span>
+              </div>
 
-              <label className="cursor-pointer text-xs font-medium text-blue-600 hover:text-blue-800">
+              <label className="cursor-pointer inline-flex items-center gap-1 text-xs font-semibold text-role-primary hover:underline">
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -434,34 +489,45 @@ export const TicketDetailPage: React.FC = () => {
                   multiple
                   className="hidden"
                 />
-                + Add Evidence
+                <Paperclip className="w-3.5 h-3.5" />
+                <span>Add Evidence</span>
               </label>
             </div>
 
             {isUploading && (
-              <div className="text-xs text-blue-600">Uploading attachment...</div>
+              <div className="text-xs text-role-primary py-1">
+                Uploading attachment...
+              </div>
             )}
 
             {attachments.length === 0 ? (
-              <div className="text-xs text-gray-400 py-1">No evidence attached.</div>
+              <div className="text-xs text-[#8B95A5] dark:text-[#6B7B92] py-2">
+                No evidence or diagnostic files attached to this ticket.
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 {attachments.map((att) => {
                   const isImage = att.fileType.startsWith('image/');
                   const isVideo = att.fileType.startsWith('video/');
+                  const imageFailed = failedImages[att.id];
 
                   return (
                     <div
                       key={att.id}
-                      className="border border-gray-200 rounded p-2 bg-gray-50 flex flex-col justify-between"
+                      className="border border-[#E1E6EE] dark:border-[#344153] rounded-md p-2.5 bg-[#F0F3F7] dark:bg-[#202C3B] flex flex-col justify-between"
                     >
-                      <div className="aspect-video w-full rounded bg-gray-200 overflow-hidden flex items-center justify-center mb-1.5">
-                        {isImage ? (
+                      {/* Media Viewport Container */}
+                      <div className="aspect-video w-full rounded bg-[#E1E6EE] dark:bg-[#192330] overflow-hidden flex items-center justify-center mb-2 relative">
+                        {isImage && !imageFailed ? (
                           <img
                             src={att.fileUrl}
                             alt={att.originalName}
+                            referrerPolicy="no-referrer"
+                            onError={() =>
+                              setFailedImages((prev) => ({ ...prev, [att.id]: true }))
+                            }
                             onClick={() => setLightboxUrl(att.fileUrl)}
-                            className="w-full h-full object-cover cursor-pointer hover:opacity-95"
+                            className="w-full h-full object-cover cursor-pointer hover:opacity-95 transition-opacity"
                           />
                         ) : isVideo ? (
                           <video
@@ -470,19 +536,46 @@ export const TicketDetailPage: React.FC = () => {
                             className="w-full h-full object-cover"
                           />
                         ) : (
-                          <Paperclip className="w-6 h-6 text-gray-400" />
+                          /* Resilient Fallback Container when preview unavailable */
+                          <div className="flex flex-col items-center justify-center p-3 text-center">
+                            {isImage ? (
+                              <FileImage className="w-8 h-8 text-[#8B95A5] dark:text-[#6B7B92] mb-1" />
+                            ) : isVideo ? (
+                              <FileVideo className="w-8 h-8 text-[#8B95A5] dark:text-[#6B7B92] mb-1" />
+                            ) : (
+                              <FileText className="w-8 h-8 text-[#8B95A5] dark:text-[#6B7B92] mb-1" />
+                            )}
+                            <span className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2] truncate max-w-[160px]">
+                              {att.originalName}
+                            </span>
+                            <span className="text-[10px] text-[#8B95A5] dark:text-[#6B7B92]">
+                              Preview unavailable
+                            </span>
+                          </div>
                         )}
                       </div>
 
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="truncate text-gray-700 font-medium max-w-[180px]" title={att.originalName}>
-                          {att.originalName}
-                        </span>
+                      {/* File Info & Action */}
+                      <div className="flex items-center justify-between text-xs pt-1">
+                        <div className="min-w-0 pr-2">
+                          <div
+                            className="truncate text-[#202B3C] dark:text-[#F1F5F9] font-medium text-xs"
+                            title={att.originalName}
+                          >
+                            {att.originalName}
+                          </div>
+                          <div className="text-[10px] text-[#8B95A5] dark:text-[#6B7B92] font-mono tabular-nums">
+                            {formatFileSize(att.fileSize)}
+                          </div>
+                        </div>
+
                         <a
                           href={att.fileUrl}
+                          download={att.originalName}
                           target="_blank"
                           rel="noreferrer"
-                          className="text-gray-400 hover:text-gray-600"
+                          title="Open or download file"
+                          className="p-1 rounded text-[#667085] hover:text-[#202B3C] dark:text-[#A5B1C2] dark:hover:text-[#F1F5F9] hover:bg-[#E1E6EE] dark:hover:bg-[#344153] transition-colors shrink-0"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </a>
@@ -494,31 +587,43 @@ export const TicketDetailPage: React.FC = () => {
             )}
           </div>
 
-          {/* Conversation Area */}
-          <div className="bg-white p-4 rounded border border-gray-200 space-y-4">
-            <h2 className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
-              Conversation ({comments.length})
-            </h2>
+          {/* Conversation & Replies */}
+          <div className="bg-white dark:bg-[#192330] p-5 rounded-lg border border-[#E1E6EE] dark:border-[#344153] space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-[#667085] dark:text-[#A5B1C2]">
+                Conversation Thread
+              </h2>
+              <span className="text-xs text-[#8B95A5] dark:text-[#6B7B92] font-mono tabular-nums">
+                ({comments.length})
+              </span>
+            </div>
 
-            {/* Comment Thread */}
+            {/* Message Thread */}
             <div className="space-y-3">
               {comments.length === 0 ? (
-                <div className="text-xs text-gray-400 py-2">
-                  No conversation messages yet.
+                <div className="text-xs text-[#8B95A5] dark:text-[#6B7B92] py-2">
+                  No conversation messages recorded yet.
                 </div>
               ) : (
                 comments.map((c) => (
                   <div
                     key={c.id}
-                    className="p-3 bg-gray-50 border border-gray-200 rounded text-xs space-y-1"
+                    className="p-3.5 bg-[#F0F3F7] dark:bg-[#202C3B] border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs space-y-1.5"
                   >
-                    <div className="flex items-center justify-between text-gray-500 text-[11px]">
-                      <span className="font-semibold text-gray-900">
-                        {c.userName} ({c.userRole === 'REQUESTER' ? 'Requester' : 'Support Agent'})
-                      </span>
-                      <span>{formatDate(c.createdAt)}</span>
+                    <div className="flex items-center justify-between text-[#8B95A5] dark:text-[#6B7B92] text-[11px]">
+                      <div className="flex items-center gap-1.5 font-semibold text-[#202B3C] dark:text-[#F1F5F9]">
+                        <span>{c.userName}</span>
+                        <span className="text-[10px] font-normal px-1.5 py-0.2 rounded bg-[#E1E6EE] dark:bg-[#344153] text-[#667085] dark:text-[#A5B1C2]">
+                          {c.userRole === 'REQUESTER'
+                            ? 'Requester'
+                            : c.userRole === 'ADMIN'
+                            ? 'Admin'
+                            : 'Support Engineer'}
+                        </span>
+                      </div>
+                      <span className="font-mono tabular-nums">{formatDate(c.createdAt)}</span>
                     </div>
-                    <div className="text-gray-800 whitespace-pre-line leading-relaxed">
+                    <div className="text-[#202B3C] dark:text-[#F1F5F9] whitespace-pre-line leading-relaxed">
                       {c.body}
                     </div>
                   </div>
@@ -526,57 +631,78 @@ export const TicketDetailPage: React.FC = () => {
               )}
             </div>
 
-            {/* Reply Box */}
-            <form onSubmit={handleAddComment} className="pt-2 border-t border-gray-100 space-y-2">
+            {/* Reply Composer */}
+            <form onSubmit={handleAddComment} className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153] space-y-2.5">
+              <label className="block text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">
+                Post a response
+              </label>
               <textarea
                 rows={3}
                 required
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Write a reply..."
-                className="w-full p-2.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Type update or instruction here..."
+                className="w-full p-2.5 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9] placeholder-[#8B95A5] dark:placeholder-[#6B7B92] focus-role-ring"
               />
               <div className="flex justify-end">
                 <button
                   type="submit"
                   disabled={isPostingComment || !newComment.trim()}
-                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-colors disabled:opacity-50 shadow-xs"
                 >
-                  {isPostingComment ? 'Sending...' : 'Add Reply'}
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isPostingComment ? 'Posting...' : 'Post Reply'}</span>
                 </button>
               </div>
             </form>
           </div>
 
           {/* Ticket Activity / History Audit Trail */}
-          <div className="bg-white p-4 rounded border border-gray-200 space-y-3">
-            <h2 className="text-xs font-semibold text-gray-700 uppercase tracking-wider flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-gray-500" />
-              Ticket Activity History ({history.length})
-            </h2>
+          <div className="bg-white dark:bg-[#192330] p-5 rounded-lg border border-[#E1E6EE] dark:border-[#344153] space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-[#667085] dark:text-[#A5B1C2] flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5" />
+                <span>Ticket Audit History</span>
+              </h2>
+              <span className="text-xs text-[#8B95A5] dark:text-[#6B7B92] font-mono tabular-nums">
+                ({history.length})
+              </span>
+            </div>
 
             {history.length === 0 ? (
-              <div className="text-xs text-gray-400 py-2">No history recorded yet.</div>
+              <div className="text-xs text-[#8B95A5] dark:text-[#6B7B92] py-2">
+                No activity history recorded.
+              </div>
             ) : (
-              <div className="divide-y divide-gray-100 text-xs">
+              <div className="divide-y divide-[#E1E6EE] dark:divide-[#344153] text-xs">
                 {history.map((ev) => (
                   <div key={ev.id} className="py-2.5 flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-gray-900 font-medium">
+                      <div className="text-[#202B3C] dark:text-[#F1F5F9] font-medium">
                         {ev.eventType === 'STATUS_CHANGED' && (
-                          <span>Status changed from <span className="font-semibold">{ev.oldValue}</span> to <span className="font-semibold text-blue-600">{ev.newValue}</span></span>
+                          <span>
+                            Status changed from <span className="font-semibold">{ev.oldValue}</span> to{' '}
+                            <span className="font-semibold text-role-primary">{ev.newValue}</span>
+                          </span>
                         )}
                         {ev.eventType === 'ASSIGNED' && (
-                          <span>Assignee updated to <span className="font-semibold text-blue-600">{ev.newValue}</span> (was {ev.oldValue})</span>
+                          <span>
+                            Assignee changed to{' '}
+                            <span className="font-semibold text-role-primary">{ev.newValue}</span>{' '}
+                            (was {ev.oldValue})
+                          </span>
                         )}
                         {ev.eventType === 'PRIORITY_CHANGED' && (
-                          <span>Priority updated from <span className="font-semibold">{ev.oldValue}</span> to <span className="font-semibold">{ev.newValue}</span></span>
+                          <span>
+                            Priority updated from <span className="font-semibold">{ev.oldValue}</span> to{' '}
+                            <span className="font-semibold">{ev.newValue}</span>
+                          </span>
                         )}
                         {ev.eventType === 'CREATED' && (
                           <span>{ev.newValue || 'Ticket created'}</span>
                         )}
                         {ev.eventType === 'AI_SUMMARY_GENERATED' && (
-                          <span>{ev.newValue || 'Advisory Gemini AI summary generated'}</span>
+                          <span>{ev.newValue || 'Advisory AI assistance summary generated'}</span>
                         )}
                         {ev.eventType !== 'STATUS_CHANGED' &&
                           ev.eventType !== 'ASSIGNED' &&
@@ -586,11 +712,11 @@ export const TicketDetailPage: React.FC = () => {
                             <span>{ev.newValue || ev.eventType}</span>
                           )}
                       </div>
-                      <div className="text-[11px] text-gray-500 mt-0.5">
+                      <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] mt-0.5">
                         by {ev.userName}
                       </div>
                     </div>
-                    <div className="text-[11px] text-gray-400 whitespace-nowrap">
+                    <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92] font-mono tabular-nums whitespace-nowrap">
                       {formatDate(ev.createdAt)}
                     </div>
                   </div>
@@ -600,47 +726,48 @@ export const TicketDetailPage: React.FC = () => {
           </div>
         </div>
 
-        {/* ================= RIGHT / SMALL SIDEBAR (1 COLUMN) ================= */}
+        {/* Small Properties & Actions Sidebar (1/3 width) */}
         <div className="space-y-4">
-          {/* Ticket Metadata & Actions Box */}
-          <div className="bg-white p-4 rounded border border-gray-200 space-y-3.5 text-xs">
-            {/* Status (with Admin & Agent Update selector) */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] font-medium text-gray-500">Status</span>
-                <StatusBadge status={ticket.status} />
-              </div>
+          {/* Properties Panel */}
+          <div className="bg-white dark:bg-[#192330] p-4 rounded-lg border border-[#E1E6EE] dark:border-[#344153] space-y-4 text-xs">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-[#667085] dark:text-[#A5B1C2] pb-2 border-b border-[#E1E6EE] dark:border-[#344153]">
+              Ticket Properties
+            </h2>
 
-              {isAgentOrAdmin && (
-                <div className="mt-1.5">
-                  <label className="block text-[10px] text-gray-400 mb-0.5 font-medium">
-                    Change Status
-                  </label>
-                  <select
-                    value={ticket.status}
-                    disabled={isUpdating}
-                    onChange={(e) => handleStatusChange(e.target.value)}
-                    className="w-full p-1.5 border border-gray-300 rounded text-xs bg-white font-medium text-gray-800"
-                  >
-                    {ALL_STATUSES.map((st) => (
-                      <option key={st.value} value={st.value}>
-                        {st.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            {/* Status (with selector for Agent/Admin) */}
+            <div>
+              <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2] mb-1">
+                Status
+              </div>
+              {isAgentOrAdmin ? (
+                <select
+                  value={ticket.status}
+                  disabled={isUpdating}
+                  onChange={(e) => handleStatusChange(e.target.value)}
+                  className="w-full p-1.5 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] font-medium text-[#202B3C] dark:text-[#F1F5F9] focus-role-ring"
+                >
+                  {ALL_STATUSES.map((st) => (
+                    <option key={st.value} value={st.value}>
+                      {st.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <StatusBadge status={ticket.status} />
               )}
             </div>
 
             {/* Priority */}
             <div>
-              <div className="text-[11px] font-medium text-gray-500 mb-1">Priority</div>
+              <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2] mb-1">
+                Priority
+              </div>
               {isAgentOrAdmin ? (
                 <select
                   value={ticket.priority}
                   disabled={isUpdating}
                   onChange={(e) => handlePriorityChange(e.target.value)}
-                  className="w-full p-1.5 border border-gray-300 rounded text-xs bg-white"
+                  className="w-full p-1.5 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9] focus-role-ring"
                 >
                   {['LOW', 'MEDIUM', 'HIGH', 'URGENT'].map((p) => (
                     <option key={p} value={p}>
@@ -655,21 +782,21 @@ export const TicketDetailPage: React.FC = () => {
 
             {/* Category */}
             <div>
-              <div className="text-[11px] font-medium text-gray-500 mb-1">Category</div>
-              <div className="font-medium text-gray-900">{ticket.category}</div>
+              <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2] mb-1">
+                Category
+              </div>
+              <div className="font-medium text-[#202B3C] dark:text-[#F1F5F9]">
+                {ticket.category}
+              </div>
             </div>
 
-            {/* Assigned To (Admin & Agent Assign / Reassign / Unassign) */}
+            {/* Assignee */}
             <div>
-              <div className="text-[11px] font-medium text-gray-500 mb-1 flex items-center justify-between">
-                <span>Assigned To</span>
-                {ticket.assignee && (
-                  <span className="text-[10px] text-blue-600 font-medium">Assigned</span>
-                )}
+              <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2] mb-1">
+                Assignee
               </div>
-
               {isAgentOrAdmin ? (
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <select
                     value={ticket.assignee?.id || ''}
                     disabled={isUpdating}
@@ -677,7 +804,7 @@ export const TicketDetailPage: React.FC = () => {
                       const val = e.target.value ? parseInt(e.target.value, 10) : null;
                       handleAssigneeChange(val);
                     }}
-                    className="w-full p-1.5 border border-gray-300 rounded text-xs bg-white font-medium text-gray-800"
+                    className="w-full p-1.5 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] font-medium text-[#202B3C] dark:text-[#F1F5F9] focus-role-ring"
                   >
                     <option value="">(Unassigned)</option>
                     {agents.map((ag) => (
@@ -687,141 +814,183 @@ export const TicketDetailPage: React.FC = () => {
                     ))}
                   </select>
 
-                  {/* Assign to Me button for quick pickup */}
                   {user && ticket.assignee?.id !== user.id && (
                     <button
                       type="button"
                       disabled={isUpdating}
                       onClick={() => handleAssigneeChange(user.id)}
-                      className="text-[11px] text-blue-600 hover:text-blue-800 font-medium flex items-center gap-1 mt-1"
+                      className="text-[11px] text-role-primary hover:underline font-semibold flex items-center gap-1"
                     >
                       <UserCheck className="w-3 h-3" />
-                      Assign to me
+                      <span>Assign to me</span>
                     </button>
                   )}
                 </div>
               ) : (
-                <div className="font-medium text-gray-900">
+                <div className="font-medium text-[#202B3C] dark:text-[#F1F5F9]">
                   {ticket.assignee ? ticket.assignee.name : 'Unassigned'}
                 </div>
               )}
             </div>
 
-            {/* Requester Action (Can confirm & close if resolved) */}
+            {/* Requester Action (Confirm & Close if Resolved) */}
             {isRequester && ticket.status === 'RESOLVED' && (
-              <div className="pt-3 border-t border-gray-100">
+              <div className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153]">
                 <button
                   type="button"
                   disabled={isUpdating}
                   onClick={() => handleStatusChange('CLOSED')}
-                  className="w-full text-center px-3 py-1.5 rounded bg-gray-900 hover:bg-black text-xs font-semibold text-white flex items-center justify-center gap-1.5"
+                  className="w-full text-center px-3 py-1.5 rounded-md bg-[#202B3C] hover:bg-black dark:bg-[#F1F5F9] dark:hover:bg-white text-xs font-semibold text-white dark:text-[#111821] flex items-center justify-center gap-1.5 transition-colors"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  Confirm & Close Ticket
+                  <span>Confirm & Close Ticket</span>
                 </button>
               </div>
             )}
           </div>
 
-          {/* ================= AI SUMMARY SECTION ================= */}
-          <div className="bg-white rounded border border-gray-200 text-xs">
+          {/* Gemini AI Assistance Panel */}
+          <div className="bg-white dark:bg-[#192330] rounded-lg border border-[#E1E6EE] dark:border-[#344153] text-xs overflow-hidden">
             <div
               onClick={() => setIsAiExpanded(!isAiExpanded)}
-              className="px-3.5 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center justify-between cursor-pointer select-none"
+              className="px-3.5 py-2.5 bg-[#F0F3F7] dark:bg-[#202C3B] border-b border-[#E1E6EE] dark:border-[#344153] flex items-center justify-between cursor-pointer select-none"
             >
-              <div className="font-semibold text-gray-800 flex items-center gap-1.5">
-                {isAiExpanded ? (
-                  <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5 text-gray-500" />
-                )}
-                AI Summary
+              <div className="font-semibold text-[#202B3C] dark:text-[#F1F5F9] flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-role-primary" />
+                <span>AI Assistance</span>
               </div>
-              <span className="text-[11px] text-gray-400">Advisory</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-[#8B95A5] dark:text-[#6B7B92]">Advisory</span>
+                {isAiExpanded ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-[#8B95A5] dark:text-[#6B7B92]" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-[#8B95A5] dark:text-[#6B7B92]" />
+                )}
+              </div>
             </div>
 
             {isAiExpanded && (
               <div className="p-3.5 space-y-3">
-                {/* AI Loading State */}
-                {aiState === 'LOADING' && (
-                  <div className="p-3 bg-gray-50 border border-gray-200 rounded text-center space-y-1">
-                    <div className="font-medium text-gray-800">Generating summary...</div>
-                    <div className="text-[11px] text-gray-500">
-                      Analyzing ticket details and conversation with Gemini
-                    </div>
-                  </div>
-                )}
-
-                {/* AI Error State */}
-                {aiState === 'ERROR' && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded space-y-2">
-                    <div className="text-red-700">
-                      {aiError || 'AI summary is temporarily unavailable.'}
-                    </div>
+                {aiState === 'IDLE' && (
+                  <div className="text-center py-2 space-y-2">
+                    <p className="text-xs text-[#667085] dark:text-[#A5B1C2]">
+                      Generate an advisory summary and troubleshooting checklist from ticket details and comments.
+                    </p>
                     {isAgentOrAdmin && (
                       <button
                         type="button"
                         onClick={handleGenerateAISummary}
-                        className="px-2.5 py-1 text-xs font-medium text-red-800 bg-white border border-red-300 rounded hover:bg-red-50"
+                        className="px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-colors shadow-xs"
                       >
-                        Try Again
+                        Generate Summary
                       </button>
                     )}
                   </div>
                 )}
 
-                {/* AI Success / Content Display */}
-                {aiState === 'SUCCESS' && aiSummary && (
-                  <div className="space-y-2.5 pt-1">
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">Issue Summary</div>
-                      <div className="text-gray-700 mt-0.5 leading-normal">{aiSummary.issueSummary}</div>
+                {aiState === 'LOADING' && (
+                  <div className="p-3 bg-[#F0F3F7] dark:bg-[#202C3B] rounded-md text-center space-y-1">
+                    <div className="font-medium text-[#202B3C] dark:text-[#F1F5F9]">
+                      Analyzing ticket details...
                     </div>
-
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">Impact</div>
-                      <div className="text-gray-700 mt-0.5 leading-normal">{aiSummary.impact}</div>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">What Has Been Tried</div>
-                      <div className="text-gray-700 mt-0.5 leading-normal">{aiSummary.whatHasBeenTried}</div>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">Current Situation</div>
-                      <div className="text-gray-700 mt-0.5 leading-normal">{aiSummary.currentSituation}</div>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">Missing Information</div>
-                      <div className="text-gray-700 mt-0.5 leading-normal">{aiSummary.missingInformation}</div>
-                    </div>
-
-                    <div>
-                      <div className="font-bold text-gray-900 text-[11px]">Suggested Troubleshooting</div>
-                      <ol className="mt-1 list-decimal list-inside space-y-1 text-gray-700 leading-normal">
-                        {aiSummary.suggestedTroubleshootingSteps.map((s, idx) => (
-                          <li key={idx}>{s}</li>
-                        ))}
-                      </ol>
-                    </div>
-
-                    <div className="pt-2 border-t border-gray-100 text-[10px] text-gray-400">
-                      AI-generated assistance. Verify before taking action.
+                    <div className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92]">
+                      Processing diagnosis with Gemini
                     </div>
                   </div>
                 )}
 
-                {/* Generate / Regenerate Button (Available to Agents/Admins) */}
-                {isAgentOrAdmin && aiState !== 'LOADING' && (
-                  <button
-                    type="button"
-                    onClick={handleGenerateAISummary}
-                    className="w-full mt-1 px-3 py-1.5 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-300 rounded hover:bg-gray-100 transition-colors"
-                  >
-                    {aiState === 'SUCCESS' ? 'Regenerate Summary' : 'Generate Summary'}
-                  </button>
+                {aiState === 'ERROR' && (
+                  <div className="p-3 bg-red-50 dark:bg-[#381E24] border border-red-200 dark:border-[#5C2A34] rounded-md space-y-2">
+                    <div className="text-red-700 dark:text-[#F87171]">
+                      {aiError || 'AI assistance is temporarily unavailable.'}
+                    </div>
+                    {isAgentOrAdmin && (
+                      <button
+                        type="button"
+                        onClick={handleGenerateAISummary}
+                        className="px-2.5 py-1 text-xs font-medium text-red-800 dark:text-red-200 bg-white dark:bg-[#192330] border border-red-300 dark:border-[#5C2A34] rounded hover:bg-red-50 dark:hover:bg-[#202C3B]"
+                      >
+                        Retry Analysis
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {aiState === 'SUCCESS' && aiSummary && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                        Issue Summary
+                      </div>
+                      <div className="text-[#667085] dark:text-[#A5B1C2] mt-0.5 leading-normal">
+                        {aiSummary.issueSummary}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                        Impact
+                      </div>
+                      <div className="text-[#667085] dark:text-[#A5B1C2] mt-0.5 leading-normal">
+                        {aiSummary.impact}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                        What Has Been Tried
+                      </div>
+                      <div className="text-[#667085] dark:text-[#A5B1C2] mt-0.5 leading-normal">
+                        {aiSummary.whatHasBeenTried}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                        Current Situation
+                      </div>
+                      <div className="text-[#667085] dark:text-[#A5B1C2] mt-0.5 leading-normal">
+                        {aiSummary.currentSituation}
+                      </div>
+                    </div>
+
+                    {aiSummary.missingInformation && (
+                      <div>
+                        <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                          Missing Information
+                        </div>
+                        <div className="text-[#667085] dark:text-[#A5B1C2] mt-0.5 leading-normal">
+                          {aiSummary.missingInformation}
+                        </div>
+                      </div>
+                    )}
+
+                    {aiSummary.suggestedTroubleshootingSteps?.length > 0 && (
+                      <div>
+                        <div className="font-bold text-[#202B3C] dark:text-[#F1F5F9] text-[11px]">
+                          Suggested Troubleshooting
+                        </div>
+                        <ol className="mt-1 list-decimal list-inside space-y-1 text-[#667085] dark:text-[#A5B1C2] leading-normal">
+                          {aiSummary.suggestedTroubleshootingSteps.map((step, idx) => (
+                            <li key={idx}>{step}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
+
+                    <div className="pt-2 border-t border-[#E1E6EE] dark:border-[#344153] flex items-center justify-between text-[10px] text-[#8B95A5] dark:text-[#6B7B92]">
+                      <span>AI Advisory. Verify before action.</span>
+                      {isAgentOrAdmin && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateAISummary}
+                          className="text-role-primary hover:underline font-medium"
+                        >
+                          Regenerate
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -833,19 +1002,23 @@ export const TicketDetailPage: React.FC = () => {
       {lightboxUrl && (
         <div
           onClick={() => setLightboxUrl(null)}
-          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-[#111821]/80 backdrop-blur-xs flex items-center justify-center p-4"
         >
-          <div className="relative max-w-4xl max-h-[90vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative max-w-4xl max-h-[90vh] bg-white dark:bg-[#192330] p-2 rounded-lg border border-[#E1E6EE] dark:border-[#344153]"
+          >
             <button
               onClick={() => setLightboxUrl(null)}
-              className="absolute -top-8 right-0 text-white hover:text-gray-300"
+              className="absolute -top-9 right-0 text-white hover:text-slate-300 p-1"
+              aria-label="Close image preview"
             >
               <X className="w-5 h-5" />
             </button>
             <img
               src={lightboxUrl}
-              alt="Evidence zoom"
-              className="max-h-[85vh] w-auto max-w-full rounded"
+              alt="Evidence preview"
+              className="max-h-[80vh] w-auto max-w-full rounded"
             />
           </div>
         </div>

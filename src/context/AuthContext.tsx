@@ -15,7 +15,8 @@ interface AuthContextType {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (name: string, email: string, password: string, role?: UserRole) => Promise<void>;
+  register: (name: string, email: string, password: string, role?: UserRole, setupKey?: string) => Promise<void>;
+  promoteToAdmin: (email: string, setupKey: string) => Promise<void>;
   logout: () => void;
   switchUser: (email: string, password: string) => Promise<void>;
 }
@@ -59,8 +60,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(receivedUser);
   };
 
-  const register = async (name: string, email: string, password: string, role?: UserRole) => {
-    const res = await api.post('/auth/register', { name, email, password, role });
+  const register = async (
+    name: string,
+    email: string,
+    password: string,
+    role?: UserRole,
+    setupKey?: string
+  ) => {
+    const res = await api.post('/auth/register', { name, email, password, role, setupKey });
+    const { token: receivedToken, user: receivedUser } = res.data;
+    localStorage.setItem('supportflow_token', receivedToken);
+    setToken(receivedToken);
+    setUser(receivedUser);
+  };
+
+  const promoteToAdmin = async (email: string, setupKey: string) => {
+    const res = await api.post('/auth/setup-admin', { email, setupKey });
     const { token: receivedToken, user: receivedUser } = res.data;
     localStorage.setItem('supportflow_token', receivedToken);
     setToken(receivedToken);
@@ -78,7 +93,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, register, logout, switchUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        isLoading,
+        login,
+        register,
+        promoteToAdmin,
+        logout,
+        switchUser,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

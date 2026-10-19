@@ -1,8 +1,8 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import { db } from '../../db/index.ts';
 import { attachments, tickets, ticketEvents } from '../../db/schema.ts';
 import { eq } from 'drizzle-orm';
-import { requireAuth, AuthRequest } from '../middleware/auth.ts';
+import { requireAuth, type AuthRequest } from '../middleware/auth.ts';
 import { upload } from '../middleware/upload.ts';
 import { storageService } from '../storage/storageService.ts';
 import { config } from '../config.ts';

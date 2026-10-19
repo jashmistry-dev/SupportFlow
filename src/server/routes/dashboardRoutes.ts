@@ -1,8 +1,8 @@
-import { Router, Response } from 'express';
+import { Router, type Response } from 'express';
 import { db } from '../../db/index.ts';
 import { tickets, users } from '../../db/schema.ts';
 import { eq, or, desc, sql } from 'drizzle-orm';
-import { requireAuth, AuthRequest } from '../middleware/auth.ts';
+import { requireAuth, type AuthRequest } from '../middleware/auth.ts';
 
 const router = Router();
 

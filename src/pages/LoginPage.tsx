@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.tsx';
-import { LifeBuoy } from 'lucide-react';
+import { ThemeToggle } from '../components/ThemeToggle.tsx';
+import { LifeBuoy, AlertCircle, ArrowRight } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
   const { login } = useAuth();
@@ -28,46 +29,55 @@ export const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-[calc(100vh-3.5rem)] flex flex-col justify-center py-10 px-4 sm:px-6">
-      <div className="sm:mx-auto sm:w-full sm:max-w-sm">
-        <div className="flex justify-center mb-2">
-          <div className="w-8 h-8 rounded bg-blue-600 flex items-center justify-center text-white">
-            <LifeBuoy className="w-5 h-5" />
+    <div className="py-12 px-4 sm:px-6 flex flex-col justify-center">
+      {/* Top Brand & Theme Switch */}
+      <div className="sm:mx-auto sm:w-full sm:max-w-sm flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-role-primary flex items-center justify-center text-role-contrast shadow-xs">
+            <LifeBuoy className="w-4 h-4" />
           </div>
+          <span className="font-bold text-sm tracking-tight text-[#202B3C] dark:text-[#F1F5F9]">
+            SupportFlow
+          </span>
         </div>
-        <h2 className="text-center text-lg font-bold text-gray-900">
-          SupportFlow Login
-        </h2>
-        <p className="text-center text-xs text-gray-500 mt-0.5">
-          Internal Technical Support System
+        <ThemeToggle />
+      </div>
+
+      <div className="sm:mx-auto sm:w-full sm:max-w-sm">
+        <h1 className="text-xl font-bold tracking-tight text-[#202B3C] dark:text-[#F1F5F9]">
+          Sign in to your account
+        </h1>
+        <p className="text-xs text-[#667085] dark:text-[#A5B1C2] mt-1">
+          Technical Support Management System
         </p>
       </div>
 
-      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-sm">
-        <div className="bg-white py-6 px-6 border border-gray-200 rounded">
+      <div className="mt-5 sm:mx-auto sm:w-full sm:max-w-sm">
+        <div className="bg-white dark:bg-[#192330] p-6 rounded-lg border border-[#E1E6EE] dark:border-[#344153] shadow-xs">
           {error && (
-            <div className="mb-4 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded">
-              {error}
+            <div className="mb-4 p-3 bg-red-50 dark:bg-[#381E24] border border-red-200 dark:border-[#5C2A34] text-red-700 dark:text-[#F87171] text-xs rounded-md flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+              <span>{error}</span>
             </div>
           )}
 
-          <form className="space-y-3" onSubmit={handleSubmit}>
+          <form className="space-y-4" onSubmit={handleSubmit}>
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
-                Email
+              <label className="block text-xs font-semibold text-[#202B3C] dark:text-[#F1F5F9] mb-1.5">
+                Corporate Email
               </label>
               <input
                 type="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@company.internal"
-                className="w-full px-3 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="name@company.com"
+                className="w-full px-3 py-2 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9] placeholder-[#8B95A5] dark:placeholder-[#6B7B92] focus-role-ring"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">
+              <label className="block text-xs font-semibold text-[#202B3C] dark:text-[#F1F5F9] mb-1.5">
                 Password
               </label>
               <input
@@ -76,23 +86,36 @@ export const LoginPage: React.FC = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-3 py-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                className="w-full px-3 py-2 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9] placeholder-[#8B95A5] dark:placeholder-[#6B7B92] focus-role-ring"
               />
             </div>
 
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full mt-2 py-2 px-3 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50"
+              className="w-full mt-2 py-2 px-3 text-xs font-semibold btn-role-primary rounded-md transition-colors disabled:opacity-50 shadow-xs flex items-center justify-center gap-1.5"
             >
-              {isLoading ? 'Signing in...' : 'Sign In'}
+              <span>{isLoading ? 'Signing in...' : 'Sign In'}</span>
+              {!isLoading && <ArrowRight className="w-3.5 h-3.5" />}
             </button>
           </form>
 
-          <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
+          <div className="mt-5 pt-4 border-t border-[#E1E6EE] dark:border-[#344153] flex items-center justify-between text-xs text-[#667085] dark:text-[#A5B1C2]">
             <span>Need an account?</span>
-            <Link to="/register" className="text-blue-600 hover:underline">
+            <Link
+              to="/register"
+              className="text-role-primary hover:underline font-semibold"
+            >
               Register
+            </Link>
+          </div>
+
+          <div className="mt-3 text-center">
+            <Link
+              to="/admin-setup"
+              className="text-[#8B95A5] dark:text-[#6B7B92] hover:text-[#202B3C] dark:hover:text-[#F1F5F9] text-[11px] underline"
+            >
+              Administrator Setup with Setup Key
             </Link>
           </div>
         </div>

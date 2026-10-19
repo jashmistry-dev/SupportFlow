@@ -1,12 +1,30 @@
-import { Request, Response, NextFunction } from 'express';
+import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { db } from '../../db/index.ts';
 import { users } from '../../db/schema.ts';
 import { eq } from 'drizzle-orm';
 import { config } from '../config.ts';
+import fs from 'fs';
+import path from 'path';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import firebaseConfig from '../../../firebase-applet-config.json';
+
+let firebaseConfig: { projectId?: string } = {};
+try {
+  const possiblePaths = [
+    path.resolve(process.cwd(), 'firebase-applet-config.json'),
+    path.resolve(import.meta.dirname || process.cwd(), '../../../firebase-applet-config.json'),
+    path.resolve(import.meta.dirname || process.cwd(), '../../../../firebase-applet-config.json'),
+  ];
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      firebaseConfig = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      break;
+    }
+  }
+} catch {
+  // Gracefully continue if firebase-applet-config.json cannot be read
+}
 
 // Initialize Firebase Admin if not already initialized
 if (!getApps().length && firebaseConfig?.projectId) {

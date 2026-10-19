@@ -35,4 +35,4 @@ RUN mkdir -p /app/uploads
 
 EXPOSE 3000
 
-CMD ["node", "--loader", "tsx", "server.ts"]
+CMD ["node", "server.ts"]

@@ -6,6 +6,7 @@ import {
   integer,
   timestamp,
   index,
+  boolean,
 } from 'drizzle-orm/pg-core';
 
 // USERS TABLE
@@ -77,12 +78,14 @@ export const comments = pgTable(
       .references(() => users.id)
       .notNull(),
     body: text('body').notNull(),
+    isInternal: boolean('is_internal').default(false).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
   (table) => [
     index('comments_ticket_id_idx').on(table.ticketId),
     index('comments_user_id_idx').on(table.userId),
+    index('comments_is_internal_idx').on(table.isInternal),
   ]
 );
 
