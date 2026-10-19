@@ -23,6 +23,8 @@ import {
   FileVideo,
   FileText,
   Download,
+  Lock,
+  MessageSquare,
 } from 'lucide-react';
 
 interface TicketData {
@@ -71,6 +73,7 @@ interface Comment {
   userId: number;
   userName: string;
   userRole: string;
+  isInternal?: boolean;
 }
 
 interface TicketEvent {
@@ -119,6 +122,7 @@ export const TicketDetailPage: React.FC = () => {
 
   // Comment & file uploads
   const [newComment, setNewComment] = useState('');
+  const [commentType, setCommentType] = useState<'public' | 'internal'>('public');
   const [isPostingComment, setIsPostingComment] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -239,10 +243,14 @@ export const TicketDetailPage: React.FC = () => {
     try {
       setIsPostingComment(true);
       setActionError(null);
-      const res = await api.post(`/tickets/${ticket.id}/comments`, { body: newComment.trim() });
+      const isInternal = commentType === 'internal';
+      const res = await api.post(`/tickets/${ticket.id}/comments`, {
+        body: newComment.trim(),
+        isInternal,
+      });
       setComments((prev) => [...prev, res.data.comment]);
       setNewComment('');
-      showToast('Comment posted successfully', 'success');
+      showToast(isInternal ? 'Internal note added' : 'Reply posted successfully', 'success');
     } catch (err: any) {
       console.error('Failed to add reply:', err);
       setActionError(err.response?.data?.error || 'Failed to post reply.');
@@ -384,10 +392,53 @@ export const TicketDetailPage: React.FC = () => {
         </div>
       </div>
 
-      {actionError && (
-        <div className="p-3 bg-red-50 dark:bg-[#381E24] border border-red-200 dark:border-[#5C2A34] rounded-md text-xs text-red-700 dark:text-[#F87171] flex items-center gap-2">
-          <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
-          <span>{actionError}</span>
+      {/* Contextual Lifecycle Feedback Banners */}
+      {ticket.status === 'RESOLVED' && isRequester && (
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-lg space-y-3 animate-fade-in shadow-xs">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <h3 className="text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                Support has marked this issue as Resolved
+              </h3>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 leading-relaxed">
+                Please verify that the fix works in your environment. If everything is working properly, click &quot;Confirm & Close Ticket&quot;. If the problem still persists, click &quot;Issue Persists (Reopen)&quot; to return it to our engineering queue.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 pt-1 pl-8">
+            <button
+              type="button"
+              disabled={isUpdating}
+              onClick={() => handleStatusChange('CLOSED')}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded-md bg-emerald-600 hover:bg-emerald-700 text-white transition-colors shadow-xs flex items-center gap-1.5"
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Confirm &amp; Close Ticket</span>
+            </button>
+            <button
+              type="button"
+              disabled={isUpdating}
+              onClick={() => handleStatusChange('IN_PROGRESS')}
+              className="px-3.5 py-1.5 text-xs font-semibold rounded-md border border-emerald-300 dark:border-emerald-700/80 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100/70 dark:hover:bg-emerald-900/40 transition-colors"
+            >
+              Issue Persists (Reopen)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ticket.status === 'WAITING_FOR_REQUESTER' && isRequester && (
+        <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 rounded-lg flex items-start gap-3 animate-fade-in shadow-xs">
+          <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs">
+            <h3 className="font-bold text-amber-900 dark:text-amber-200">
+              Action Required: Support is waiting on your feedback
+            </h3>
+            <p className="text-amber-700 dark:text-amber-300 leading-relaxed">
+              Our engineering team requested diagnostic information or steps. Please reply in the conversation thread below so we can continue investigating.
+            </p>
+          </div>
         </div>
       )}
 
@@ -608,22 +659,42 @@ export const TicketDetailPage: React.FC = () => {
                 comments.map((c) => (
                   <div
                     key={c.id}
-                    className="p-3.5 bg-[#F0F3F7] dark:bg-[#202C3B] border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs space-y-1.5"
+                    className={`p-3.5 rounded-md text-xs space-y-1.5 transition-colors ${
+                      c.isInternal
+                        ? 'bg-amber-50/70 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800/60'
+                        : 'bg-[#F0F3F7] dark:bg-[#202C3B] border border-[#E1E6EE] dark:border-[#344153]'
+                    }`}
                   >
-                    <div className="flex items-center justify-between text-[#8B95A5] dark:text-[#6B7B92] text-[11px]">
+                    <div className="flex items-center justify-between text-[11px]">
                       <div className="flex items-center gap-1.5 font-semibold text-[#202B3C] dark:text-[#F1F5F9]">
-                        <span>{c.userName}</span>
-                        <span className="text-[10px] font-normal px-1.5 py-0.2 rounded bg-[#E1E6EE] dark:bg-[#344153] text-[#667085] dark:text-[#A5B1C2]">
-                          {c.userRole === 'REQUESTER'
-                            ? 'Requester'
-                            : c.userRole === 'ADMIN'
-                            ? 'Admin'
-                            : 'Support Engineer'}
-                        </span>
+                        {c.isInternal ? (
+                          <>
+                            <span className="flex items-center gap-1 text-amber-800 dark:text-amber-200">
+                              <Lock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                              <span>{c.userName}</span>
+                            </span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-200/80 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200">
+                              Internal Note
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{c.userName}</span>
+                            <span className="text-[10px] font-normal px-1.5 py-0.2 rounded bg-[#E1E6EE] dark:bg-[#344153] text-[#667085] dark:text-[#A5B1C2]">
+                              {c.userRole === 'REQUESTER'
+                                ? 'Requester'
+                                : c.userRole === 'ADMIN'
+                                ? 'Admin'
+                                : 'Support Engineer'}
+                            </span>
+                          </>
+                        )}
                       </div>
-                      <span className="font-mono tabular-nums">{formatDate(c.createdAt)}</span>
+                      <span className={`font-mono tabular-nums ${c.isInternal ? 'text-amber-700/80 dark:text-amber-400/80' : 'text-[#8B95A5] dark:text-[#6B7B92]'}`}>
+                        {formatDate(c.createdAt)}
+                      </span>
                     </div>
-                    <div className="text-[#202B3C] dark:text-[#F1F5F9] whitespace-pre-line leading-relaxed">
+                    <div className={`${c.isInternal ? 'text-amber-950 dark:text-amber-100' : 'text-[#202B3C] dark:text-[#F1F5F9]'} whitespace-pre-line leading-relaxed`}>
                       {c.body}
                     </div>
                   </div>
@@ -633,25 +704,90 @@ export const TicketDetailPage: React.FC = () => {
 
             {/* Reply Composer */}
             <form onSubmit={handleAddComment} className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153] space-y-2.5">
-              <label className="block text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">
-                Post a response
-              </label>
+              {/* Internal Note vs Public Reply selector for Support Agents & Admins */}
+              {isAgentOrAdmin ? (
+                <div className="flex items-center justify-between">
+                  <div className="inline-flex rounded-md p-0.5 bg-[#F0F3F7] dark:bg-[#202C3B] border border-[#E1E6EE] dark:border-[#344153]">
+                    <button
+                      type="button"
+                      onClick={() => setCommentType('public')}
+                      className={`px-3 py-1 text-xs font-semibold rounded transition-all flex items-center gap-1.5 ${
+                        commentType === 'public'
+                          ? 'bg-white dark:bg-[#192330] text-[#202B3C] dark:text-[#F1F5F9] shadow-xs'
+                          : 'text-[#667085] dark:text-[#A5B1C2] hover:text-[#202B3C] dark:hover:text-[#F1F5F9]'
+                      }`}
+                    >
+                      <MessageSquare className="w-3 h-3" />
+                      <span>Public Reply</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCommentType('internal')}
+                      className={`px-3 py-1 text-xs font-semibold rounded transition-all flex items-center gap-1.5 ${
+                        commentType === 'internal'
+                          ? 'bg-amber-100 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 shadow-xs font-bold'
+                          : 'text-[#667085] dark:text-[#A5B1C2] hover:text-amber-700 dark:hover:text-amber-300'
+                      }`}
+                    >
+                      <Lock className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                      <span>Internal Note</span>
+                    </button>
+                  </div>
+
+                  <span className="text-[11px] text-[#8B95A5] dark:text-[#6B7B92]">
+                    {commentType === 'internal' ? '🔒 Private to team' : '💬 Visible to customer'}
+                  </span>
+                </div>
+              ) : (
+                <label className="block text-xs font-medium text-[#667085] dark:text-[#A5B1C2]">
+                  Post a response
+                </label>
+              )}
+
               <textarea
                 rows={3}
                 required
                 value={newComment}
                 onChange={(e) => setNewComment(e.target.value)}
-                placeholder="Type update or instruction here..."
-                className="w-full p-2.5 border border-[#E1E6EE] dark:border-[#344153] rounded-md text-xs bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9] placeholder-[#8B95A5] dark:placeholder-[#6B7B92] focus-role-ring"
+                placeholder={
+                  commentType === 'internal'
+                    ? 'Write internal notes, diagnostic observations, or escalation notes for the team...'
+                    : 'Type update or question for the requester...'
+                }
+                className={`w-full p-2.5 border rounded-md text-xs placeholder-[#8B95A5] dark:placeholder-[#6B7B92] focus-role-ring ${
+                  commentType === 'internal'
+                    ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 text-amber-950 dark:text-amber-100'
+                    : 'border-[#E1E6EE] dark:border-[#344153] bg-white dark:bg-[#202C3B] text-[#202B3C] dark:text-[#F1F5F9]'
+                }`}
               />
-              <div className="flex justify-end">
+
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-[#8B95A5] dark:text-[#6B7B92]">
+                  {commentType === 'internal'
+                    ? '⚠️ Internal notes are strictly hidden from requesters.'
+                    : 'Customer will receive this message.'}
+                </span>
+
                 <button
                   type="submit"
                   disabled={isPostingComment || !newComment.trim()}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold btn-role-primary rounded-md transition-colors disabled:opacity-50 shadow-xs"
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-md transition-colors disabled:opacity-50 shadow-xs ${
+                    commentType === 'internal'
+                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                      : 'btn-role-primary'
+                  }`}
                 >
-                  <Send className="w-3.5 h-3.5" />
-                  <span>{isPostingComment ? 'Posting...' : 'Post Reply'}</span>
+                  {commentType === 'internal' ? (
+                    <>
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>{isPostingComment ? 'Recording...' : 'Record Internal Note'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" />
+                      <span>{isPostingComment ? 'Posting...' : 'Post Reply'}</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -833,18 +969,57 @@ export const TicketDetailPage: React.FC = () => {
               )}
             </div>
 
-            {/* Requester Action (Confirm & Close if Resolved) */}
+            {/* Requester Action (Confirm & Close or Reopen if Resolved) */}
             {isRequester && ticket.status === 'RESOLVED' && (
-              <div className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153]">
+              <div className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153] space-y-2">
                 <button
                   type="button"
                   disabled={isUpdating}
                   onClick={() => handleStatusChange('CLOSED')}
-                  className="w-full text-center px-3 py-1.5 rounded-md bg-[#202B3C] hover:bg-black dark:bg-[#F1F5F9] dark:hover:bg-white text-xs font-semibold text-white dark:text-[#111821] flex items-center justify-center gap-1.5 transition-colors"
+                  className="w-full text-center px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors shadow-xs"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Confirm & Close Ticket</span>
+                  <span>Confirm &amp; Close</span>
                 </button>
+                <button
+                  type="button"
+                  disabled={isUpdating}
+                  onClick={() => handleStatusChange('IN_PROGRESS')}
+                  className="w-full text-center px-3 py-1.5 rounded-md border border-[#E1E6EE] dark:border-[#344153] hover:bg-[#F0F3F7] dark:hover:bg-[#202C3B] text-xs font-semibold text-[#202B3C] dark:text-[#F1F5F9] transition-colors"
+                >
+                  <span>Issue Persists (Reopen)</span>
+                </button>
+              </div>
+            )}
+
+            {/* Quick Agent Actions */}
+            {isAgentOrAdmin && ticket.status !== 'CLOSED' && (
+              <div className="pt-3 border-t border-[#E1E6EE] dark:border-[#344153] space-y-1.5">
+                <div className="text-[11px] font-medium text-[#667085] dark:text-[#A5B1C2]">
+                  Quick Actions
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {ticket.status !== 'WAITING_FOR_REQUESTER' && (
+                    <button
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => handleStatusChange('WAITING_FOR_REQUESTER')}
+                      className="w-full text-left px-2.5 py-1.5 rounded border border-[#E1E6EE] dark:border-[#344153] text-[11px] font-medium text-[#202B3C] dark:text-[#F1F5F9] hover:bg-[#F0F3F7] dark:hover:bg-[#202C3B] transition-colors"
+                    >
+                      ⏳ Set to &apos;Waiting on User&apos;
+                    </button>
+                  )}
+                  {ticket.status !== 'RESOLVED' && (
+                    <button
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => handleStatusChange('RESOLVED')}
+                      className="w-full text-left px-2.5 py-1.5 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 text-[11px] font-medium text-emerald-800 dark:text-emerald-200 hover:bg-emerald-100/60 transition-colors"
+                    >
+                      ✓ Mark as &apos;Resolved&apos;
+                    </button>
+                  )}
+                </div>
               </div>
             )}
           </div>

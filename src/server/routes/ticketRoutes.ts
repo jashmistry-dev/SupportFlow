@@ -208,13 +208,19 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       assignee = assUser || null;
     }
 
-    // Get comments
+    // Get comments with strict RBAC: Requesters never receive internal comments
+    const commentConditions = [eq(comments.ticketId, ticketId)];
+    if (user.role === 'REQUESTER') {
+      commentConditions.push(eq(comments.isInternal, false));
+    }
+
     const ticketComments = await db
       .select({
         id: comments.id,
         ticketId: comments.ticketId,
         userId: comments.userId,
         body: comments.body,
+        isInternal: comments.isInternal,
         createdAt: comments.createdAt,
         updatedAt: comments.updatedAt,
         userName: users.name,
@@ -223,7 +229,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       })
       .from(comments)
       .innerJoin(users, eq(comments.userId, users.id))
-      .where(eq(comments.ticketId, ticketId))
+      .where(and(...commentConditions))
       .orderBy(comments.createdAt);
 
     // Get attachments
@@ -245,8 +251,8 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       .where(eq(attachments.ticketId, ticketId))
       .orderBy(attachments.createdAt);
 
-    // Get ticket timeline events
-    const timeline = await db
+    // Get ticket timeline events (Filter out internal note events for requesters)
+    const rawTimeline = await db
       .select({
         id: ticketEvents.id,
         ticketId: ticketEvents.ticketId,
@@ -262,6 +268,10 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response) => {
       .innerJoin(users, eq(ticketEvents.userId, users.id))
       .where(eq(ticketEvents.ticketId, ticketId))
       .orderBy(desc(ticketEvents.createdAt));
+
+    const timeline = user.role === 'REQUESTER'
+      ? rawTimeline.filter((ev) => ev.oldValue !== 'INTERNAL')
+      : rawTimeline;
 
     return res.json({
       ticket: {

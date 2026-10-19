@@ -1,7 +1,7 @@
 import { Router, type Response } from 'express';
 import { db } from '../../db/index.ts';
 import { comments, tickets, ticketEvents, users } from '../../db/schema.ts';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { requireAuth, type AuthRequest } from '../middleware/auth.ts';
 
 const router = Router();
@@ -29,12 +29,19 @@ router.get('/:id/comments', requireAuth, async (req: AuthRequest, res: Response)
       return res.status(403).json({ error: 'Forbidden: You cannot access this ticket' });
     }
 
+    // Strict RBAC: Requesters can only see public comments (isInternal = false)
+    const commentConditions = [eq(comments.ticketId, ticketId)];
+    if (user.role === 'REQUESTER') {
+      commentConditions.push(eq(comments.isInternal, false));
+    }
+
     const list = await db
       .select({
         id: comments.id,
         ticketId: comments.ticketId,
         userId: comments.userId,
         body: comments.body,
+        isInternal: comments.isInternal,
         createdAt: comments.createdAt,
         updatedAt: comments.updatedAt,
         userName: users.name,
@@ -43,7 +50,7 @@ router.get('/:id/comments', requireAuth, async (req: AuthRequest, res: Response)
       })
       .from(comments)
       .innerJoin(users, eq(comments.userId, users.id))
-      .where(eq(comments.ticketId, ticketId))
+      .where(and(...commentConditions))
       .orderBy(comments.createdAt);
 
     return res.json({ comments: list });
@@ -58,7 +65,7 @@ router.post('/:id/comments', requireAuth, async (req: AuthRequest, res: Response
   try {
     const user = req.user!;
     const ticketId = parseInt(req.params.id, 10);
-    const { body } = req.body;
+    const { body, isInternal } = req.body;
 
     if (isNaN(ticketId)) {
       return res.status(400).json({ error: 'Invalid ticket ID' });
@@ -86,6 +93,10 @@ router.post('/:id/comments', requireAuth, async (req: AuthRequest, res: Response
       return res.status(403).json({ error: 'Forbidden: You cannot comment on this ticket' });
     }
 
+    // Only agents and admins can create internal-only notes
+    const canCreateInternal = user.role === 'SUPPORT_AGENT' || user.role === 'ADMIN';
+    const finalIsInternal = canCreateInternal ? Boolean(isInternal) : false;
+
     const newComment = await db.transaction(async (tx) => {
       const [inserted] = await tx
         .insert(comments)
@@ -93,16 +104,19 @@ router.post('/:id/comments', requireAuth, async (req: AuthRequest, res: Response
           ticketId,
           userId: user.id,
           body: body.trim(),
+          isInternal: finalIsInternal,
         })
         .returning();
 
-      // Record ticket event
+      // Record ticket event with internal/public distinction
       await tx.insert(ticketEvents).values({
         ticketId,
         userId: user.id,
         eventType: 'COMMENT_ADDED',
-        oldValue: null,
-        newValue: `${user.role === 'REQUESTER' ? 'Requester' : 'Support agent'} added response`,
+        oldValue: finalIsInternal ? 'INTERNAL' : 'PUBLIC',
+        newValue: finalIsInternal
+          ? `${user.role === 'ADMIN' ? 'Admin' : 'Support agent'} added internal note`
+          : `${user.role === 'REQUESTER' ? 'Requester' : 'Support agent'} added response`,
       });
 
       // Update ticket's updatedAt timestamp
@@ -115,7 +129,7 @@ router.post('/:id/comments', requireAuth, async (req: AuthRequest, res: Response
     });
 
     return res.status(201).json({
-      message: 'Comment added',
+      message: finalIsInternal ? 'Internal note added' : 'Comment added',
       comment: {
         ...newComment,
         userName: user.name,

@@ -198,6 +198,85 @@ async function runTestSuite() {
     assert.strictEqual(resolvedRes.data.ticket.status, 'RESOLVED');
     console.log('✓ PASS: Status transition IN_PROGRESS -> RESOLVED succeeded.');
 
+    // TEST 8B: Internal notes privacy & isolation (Requesters must never see internal comments)
+    console.log('Testing 8B: Internal notes privacy, RBAC isolation, and requester verification...');
+    // Agent posts an internal note
+    const internalNoteText = `Sensitive internal diagnostic ${Date.now()}: checked cluster node 10.0.1.55`;
+    const postInternalRes = await axios.post(
+      `${baseUrl}/tickets/${testTicketId}/comments`,
+      { body: internalNoteText, isInternal: true },
+      { headers: { Authorization: `Bearer ${agentToken}` } }
+    );
+    assert.strictEqual(postInternalRes.status, 201);
+    assert.strictEqual(postInternalRes.data.comment.isInternal, true);
+
+    // Requester fetches ticket details: internal note MUST NOT be present
+    const reqTicketDetail = await axios.get(`${baseUrl}/tickets/${testTicketId}`, {
+      headers: { Authorization: `Bearer ${req1Token}` },
+    });
+    const reqComments = reqTicketDetail.data.comments;
+    assert.ok(
+      !reqComments.some((c: any) => c.body.includes('10.0.1.55') || c.isInternal === true),
+      'Requester must NOT see internal comments in ticket details'
+    );
+
+    // Requester fetches comments endpoint: internal note MUST NOT be present
+    const reqCommentsEndpoint = await axios.get(`${baseUrl}/tickets/${testTicketId}/comments`, {
+      headers: { Authorization: `Bearer ${req1Token}` },
+    });
+    assert.ok(
+      !reqCommentsEndpoint.data.comments.some((c: any) => c.body.includes('10.0.1.55') || c.isInternal === true),
+      'Requester must NOT see internal comments in comments endpoint'
+    );
+
+    // Agent fetches comments endpoint: internal note IS present
+    const agentCommentsEndpoint = await axios.get(`${baseUrl}/tickets/${testTicketId}/comments`, {
+      headers: { Authorization: `Bearer ${agentToken}` },
+    });
+    assert.ok(
+      agentCommentsEndpoint.data.comments.some((c: any) => c.isInternal === true && c.body.includes('10.0.1.55')),
+      'Support Agent MUST see internal notes'
+    );
+
+    // Requester attempting to set isInternal: true has it forced to false
+    const reqTryInternal = await axios.post(
+      `${baseUrl}/tickets/${testTicketId}/comments`,
+      { body: 'Requester normal response', isInternal: true },
+      { headers: { Authorization: `Bearer ${req1Token}` } }
+    );
+    assert.strictEqual(reqTryInternal.data.comment.isInternal, false, 'Requester cannot force isInternal: true');
+
+    // Requester can reopen resolved ticket if issue persists
+    const reqReopen = await axios.patch(
+      `${baseUrl}/tickets/${testTicketId}/status`,
+      { status: 'IN_PROGRESS', comment: 'Issue still happening after test' },
+      { headers: { Authorization: `Bearer ${req1Token}` } }
+    );
+    assert.strictEqual(reqReopen.data.ticket.status, 'IN_PROGRESS');
+
+    // Agent resolves it again
+    await axios.patch(
+      `${baseUrl}/tickets/${testTicketId}/status`,
+      { status: 'RESOLVED', comment: 'Hotfix re-applied and verified' },
+      { headers: { Authorization: `Bearer ${agentToken}` } }
+    );
+
+    // Requester confirms and closes ticket
+    const reqClose = await axios.patch(
+      `${baseUrl}/tickets/${testTicketId}/status`,
+      { status: 'CLOSED', comment: 'Verified working, thank you!' },
+      { headers: { Authorization: `Bearer ${req1Token}` } }
+    );
+    assert.strictEqual(reqClose.data.ticket.status, 'CLOSED');
+    console.log('✓ PASS: Internal notes RBAC privacy and requester resolution confirmation verified.');
+
+    // Reopen to IN_PROGRESS so remaining tests have active ticket
+    await axios.patch(
+      `${baseUrl}/tickets/${testTicketId}/status`,
+      { status: 'IN_PROGRESS' },
+      { headers: { Authorization: `Bearer ${adminToken}` } }
+    );
+
     // TEST 9: History reflects the status changes and assignments
     console.log('Testing 9: History audit trail reflects events...');
     const historyDetail = await axios.get(`${baseUrl}/tickets/${testTicketId}`, {

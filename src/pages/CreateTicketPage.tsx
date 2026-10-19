@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { api } from '../lib/api.ts';
 import { useToast } from '../context/ToastContext.tsx';
@@ -13,6 +13,7 @@ import {
   FileImage,
   FileVideo,
   CheckCircle2,
+  Sparkles,
 } from 'lucide-react';
 
 const CATEGORIES = [
@@ -42,6 +43,42 @@ export const CreateTicketPage: React.FC = () => {
   const [category, setCategory] = useState('Application Error');
   const [priority, setPriority] = useState('MEDIUM');
   const [description, setDescription] = useState('');
+
+  // Similar tickets detection
+  const [similarTickets, setSimilarTickets] = useState<Array<{ id: number; ticketNumber: string; subject: string; status: string }>>([]);
+  const [isSearchingSimilar, setIsSearchingSimilar] = useState(false);
+  const debounceTimerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    const trimmed = subject.trim();
+    if (trimmed.length < 4) {
+      setSimilarTickets([]);
+      return;
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        setIsSearchingSimilar(true);
+        const res = await api.get(`/tickets?search=${encodeURIComponent(trimmed)}&limit=4`);
+        const matches = (res.data.tickets || []).map((t: any) => ({
+          id: t.id,
+          ticketNumber: t.ticketNumber,
+          subject: t.subject,
+          status: t.status,
+        }));
+        setSimilarTickets(matches);
+      } catch (err) {
+        // quiet fallback
+      } finally {
+        setIsSearchingSimilar(false);
+      }
+    }, 400);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [subject]);
 
   // Diagnostic details accordion
   const [showDiagnosticDetails, setShowDiagnosticDetails] = useState(false);
@@ -282,6 +319,43 @@ export const CreateTicketPage: React.FC = () => {
               <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">
                 {fieldErrors.subject}
               </p>
+            )}
+
+            {/* Similar Tickets Found Indicator */}
+            {similarTickets.length > 0 && (
+              <div className="mt-2.5 p-3 bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 rounded-md text-xs space-y-2 animate-fade-in shadow-xs">
+                <div className="flex items-center justify-between text-blue-900 dark:text-blue-200 font-semibold text-[11px]">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-role-primary" />
+                    <span>Existing similar tickets found — check if your issue is already reported:</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSimilarTickets([])}
+                    className="text-blue-500 hover:text-blue-700 dark:hover:text-blue-300"
+                    title="Dismiss"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="divide-y divide-blue-100 dark:divide-blue-900/40">
+                  {similarTickets.map((st) => (
+                    <div key={st.id} className="py-1.5 flex items-center justify-between gap-2">
+                      <Link
+                        to={`/tickets/${st.id}`}
+                        target="_blank"
+                        className="text-role-primary hover:underline font-medium truncate flex-1 flex items-center gap-1.5"
+                      >
+                        <span className="font-mono text-[11px] font-semibold">{st.ticketNumber}:</span>
+                        <span className="truncate">{st.subject}</span>
+                      </Link>
+                      <span className="px-1.5 py-0.5 text-[10px] rounded bg-white dark:bg-[#192330] font-mono border border-blue-200 dark:border-blue-800 text-[#667085] dark:text-[#A5B1C2]">
+                        {st.status.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
 
